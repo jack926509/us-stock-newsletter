@@ -48,21 +48,60 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 telegram_bot  = telegram.Bot(token=TELEGRAM_TOKEN)
 http_client: httpx.AsyncClient | None = None  # initialised in lifespan
 
-# ─── Pre-compiled HTML → Telegram Markdown patterns ───────
-_HTML_PATTERNS = [
-    (re.compile(r'<h2>(.*?)</h2>',              re.DOTALL), r'\n\n🔹 *\1*\n'),
-    (re.compile(r'<h3>(.*?)</h3>',              re.DOTALL), r'\n*\1*\n'),
-    (re.compile(r'<(?:b|strong)>(.*?)</(?:b|strong)>', re.DOTALL), r'*\1*'),
-    (re.compile(r'<a href="(.*?)">(.*?)</a>',   re.DOTALL), r'[\2](\1)'),
-    (re.compile(r'<[^>]+>'),                               ''),
-    (re.compile(r'\n{3,}'),                                '\n\n'),
-]
+# ─── UX: Telegram HTML 格式化工具 ────────────────────────
+_TICKER_RE = re.compile(r'【([A-Z]{1,5})】')
 
-def html_to_telegram(html: str) -> str:
-    text = html
-    for pattern, replacement in _HTML_PATTERNS:
-        text = pattern.sub(replacement, text)
-    return text.strip()
+def _esc(text: str) -> str:
+    """Escape HTML special chars for Telegram HTML parse mode."""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _ticker(body: str) -> str:
+    """Convert 【TICKER】 markers to bold HTML tags."""
+    return _TICKER_RE.sub(r'<b>\1</b>', body)
+
+def _arrow(change: float) -> str:
+    return "📈" if change >= 0 else "📉"
+
+def _build_header(subject: str, now: datetime) -> str:
+    weekday = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
+    date_str = now.strftime(f"%Y-%m-%d（週{weekday}）")
+    return (
+        "📊 <b>美股新聞編輯室</b>\n"
+        f"<i>{date_str}</i>\n\n"
+        f"📰 <b>{_esc(subject)}</b>"
+    )
+
+def _build_market_card(market: dict, summary: str) -> str:
+    lines = ["<b>📈 大盤指數快照</b>", ""]
+    for v in market.values():
+        arrow  = _arrow(v["change"])
+        change = f"{v['change']:+.2f}%"
+        lines.append(
+            f"{arrow} <b>{_esc(v['name'])}</b>\n"
+            f"    <code>{v['price']:,.2f}</code>  {change}"
+        )
+    if summary:
+        lines += ["", f"<i>💬 {_esc(summary)}</i>"]
+    return "\n".join(lines)
+
+def _build_section(idx: int, title: str, body: str, sources: list) -> str:
+    icons = ["1️⃣", "2️⃣", "3️⃣"]
+    icon  = icons[idx] if idx < len(icons) else "🔹"
+    text  = f"{icon} <b>{_esc(title)}</b>\n\n{_ticker(_esc(body))}"
+    if sources:
+        text += "\n\n📎 <b>消息來源</b>"
+        for s in sources[:3]:
+            label = _esc(s.get("title", "查看原文"))
+            url   = s.get("url", "")
+            text += f'\n• <a href="{url}">{label}</a>'
+    return text
+
+def _build_footer(insights: str) -> str:
+    return (
+        f"💡 <b>投資啟示</b>\n\n{_ticker(_esc(insights))}\n\n"
+        "<i>⚠️ 免責聲明：本文內容僅供參考，不構成投資建議。"
+        "投資有風險，入市須謹慎。</i>"
+    )
 
 # ─── Step 1: Finnhub 市場數據 ─────────────────────────────
 async def get_market_data() -> dict:
@@ -173,16 +212,15 @@ async def edit_newsletter(title: str, sections: list, market: dict) -> dict:
             {
                 "role": "system",
                 "content": (
-                    f"你是Bloomberg/WSJ風格的主編。整合分析報告為HTML電子報（繁體中文）。\n"
+                    f"你是Bloomberg/WSJ風格的主編。整合分析報告為結構化 JSON（繁體中文）。\n"
                     f"今日日期: {today}\n"
                     f"大盤數據: {market_snapshot}\n\n"
-                    '輸出 JSON 格式：\n{"subject": "郵件主旨", "content": "HTML內容（只用h2/h3/p/ul/li/a/b標籤）"}\n\n'
-                    "HTML 結構：\n"
-                    "1. <p> 市場快照（大盤走勢+今日情緒總結）\n"
-                    "2. 每章節：<h2>標題</h2><p>內容（股票代碼粗體）</p>\n"
-                    "3. <h3>消息來源</h3><ul>所有參考連結</ul>\n"
-                    "4. <p> 投資啟示（風險/機會提醒）\n"
-                    '5. <p style="font-size:0.8em;color:gray;"> 免責聲明：本文內容僅供參考，不構成投資建議。投資有風險，入市須謹慎。'
+                    "嚴格輸出以下 JSON 結構：\n"
+                    '{"subject":"主旨(15字內)","market_summary":"大盤情緒一句話摘要",'
+                    '"sections":[{"title":"章節標題","body":"正文（純文字，股票代碼用【TICKER】包住）",'
+                    '"sources":[{"title":"來源標題","url":"URL"}]}],'
+                    '"insights":"投資啟示與風險提醒(2-3句，股票代碼用【TICKER】包住)"}\n\n'
+                    "規則：body/insights 只輸出純文字，不含任何 HTML；sections 恰好 3 個；每個 sources 最多 3 筆。"
                 ),
             },
             {"role": "user", "content": f"主標題: {title}\n\n章節內容:\n{sections_text}"},
@@ -191,20 +229,36 @@ async def edit_newsletter(title: str, sections: list, market: dict) -> dict:
     return json.loads(resp.choices[0].message.content)
 
 # ─── Step 7: Telegram 發送 ────────────────────────────────
-async def send_to_telegram(subject: str, content_html: str):
-    await telegram_bot.send_message(
-        chat_id=TELEGRAM_CHAT_ID,
-        text=f"📰 *{subject}*",
-        parse_mode="Markdown",
-    )
-    text = html_to_telegram(content_html)
-    for i in range(0, len(text), TELEGRAM_MAX_LEN):
+async def _send_html(text: str) -> None:
+    """Send a single HTML message; split on paragraph boundary if too long."""
+    if len(text) <= TELEGRAM_MAX_LEN:
         await telegram_bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
-            text=text[i : i + TELEGRAM_MAX_LEN],
-            parse_mode="Markdown",
+            text=text,
+            parse_mode="HTML",
             disable_web_page_preview=True,
         )
+        return
+    # Graceful split: find last paragraph break before the limit
+    cut = text.rfind("\n\n", 0, TELEGRAM_MAX_LEN)
+    if cut == -1:
+        cut = TELEGRAM_MAX_LEN
+    await _send_html(text[:cut].rstrip())
+    await _send_html(text[cut:].lstrip())
+
+async def send_to_telegram(newsletter: dict, market: dict) -> None:
+    now = datetime.now(pytz.timezone(TIMEZONE))
+    blocks = [
+        _build_header(newsletter["subject"], now),
+        _build_market_card(market, newsletter.get("market_summary", "")),
+        *[
+            _build_section(i, s["title"], s["body"], s.get("sources", []))
+            for i, s in enumerate(newsletter.get("sections", []))
+        ],
+        _build_footer(newsletter.get("insights", "")),
+    ]
+    for block in blocks:
+        await _send_html(block)
 
 # ─── 主流程 ───────────────────────────────────────────────
 async def run_newsletter():
@@ -240,7 +294,7 @@ async def run_newsletter():
         log.info("電子報整合完成: %s", newsletter["subject"])
 
         # 6. 發送 Telegram
-        await send_to_telegram(newsletter["subject"], newsletter["content"])
+        await send_to_telegram(newsletter, market)
         log.info("✅ 美股日報發送完成！")
 
     except Exception as e:
