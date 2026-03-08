@@ -4,7 +4,6 @@ AI 寫手模組 (Writer)
 負責利用 Tavily 的深層搜索資料撰寫相應章節。
 """
 
-from setuptools import sic
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.clients import openai_client
