@@ -34,8 +34,15 @@ class Settings(BaseSettings):
     cron_minute: int = Field(default=30, description="Cron 觸發分鐘")
     timezone: str = Field(default="America/New_York", description="時區")
 
-    # API 端點安全
+    # 手動觸發 API 端點安全
     admin_api_key: str = Field(default="", description="手動觸發 API Key（選填）")
+
+    # Email 設定 (選填)
+    smtp_host: str = Field(default="", description="SMTP 伺服器")
+    smtp_port: int = Field(default=587, description="SMTP 通訊埠")
+    smtp_user: str = Field(default="", description="SMTP 帳號")
+    smtp_pass: str = Field(default="", description="SMTP 密碼")
+    email_recipient: str = Field(default="", description="收件人信箱")
 
     # 服務端口
     port: int = Field(default=8080, description="服務監聽端口")

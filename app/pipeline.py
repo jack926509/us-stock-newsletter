@@ -15,6 +15,7 @@ from app.ai.planner import plan_newsletter
 from app.ai.writer import write_section
 from app.ai.editor import edit_newsletter
 from app.sender import send_newsletter_to_telegram
+from app.email_sender import send_newsletter_to_email
 
 
 async def run_newsletter_pipeline() -> None:
@@ -72,9 +73,12 @@ async def run_newsletter_pipeline() -> None:
         log.info("所有章節草稿已就緒，交由 AI 主編排版合成最終報表...")
         newsletter = await edit_newsletter(plan.title, sections, market_data)
         
-        # 6. 透過 Telegram 推播
-        log.info("排版完成，開始推送 Telegram 頻道...")
-        await send_newsletter_to_telegram(newsletter, market_data)
+        # 6. 透過 Telegram 推播 與 發送 Email
+        log.info("排版完成，開始推播到所有頻道 (Telegram & Email)...")
+        await asyncio.gather(
+            send_newsletter_to_telegram(newsletter, market_data),
+            send_newsletter_to_email(newsletter, market_data)
+        )
         log.info("✅ 流程結束，美股日報發送成功")
         
     except Exception as e:
