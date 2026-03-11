@@ -17,7 +17,7 @@ class DataFetchError(Exception):
     pass
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=False)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def _fetch_single_quote(sym: str, name: str) -> tuple[str, dict]:
     """獲取單個股票的報價，帶有重試機制"""
     http_client = get_http_client()
@@ -66,7 +66,7 @@ async def get_market_data() -> dict:
     return market_data
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=False)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def get_finnhub_news(category: str = "general", count: int = 5) -> list:
     """獲取最新的 Finnhub 新聞，帶有重試機制"""
     http_client = get_http_client()
