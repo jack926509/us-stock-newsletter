@@ -30,9 +30,9 @@ class Settings(BaseSettings):
     telegram_chat_id: str = Field(..., description="Telegram Chat/Channel ID")
 
     # 排程設定（有預設值）
-    cron_hour: int = Field(default=7, description="Cron 觸發小時 (美東時間)")
-    cron_minute: int = Field(default=30, description="Cron 觸發分鐘")
-    timezone: str = Field(default="America/New_York", description="時區")
+    cron_hour: int = Field(default=8, description="Cron 觸發小時 (美東時間)")
+    cron_minute: int = Field(default=0, description="Cron 觸發分鐘")
+    timezone: str = Field(default="Asia/Taipei", description="時區")
 
     # API 端點安全
     admin_api_key: str = Field(default="", description="手動觸發 API Key（選填）")
