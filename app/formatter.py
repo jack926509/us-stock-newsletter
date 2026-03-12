@@ -31,14 +31,11 @@ def get_trend_arrow(change: float) -> str:
 
 
 def build_header(subject: str, now: datetime) -> str:
-    """產生開頭主旨段落。"""
+    """產生開頭主旨段落（精簡單行標題）。"""
     weekday = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
     date_str = now.strftime(f"%Y/%m/%d（週{weekday}）")
     return (
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "📰 <b>美股日報</b>  <i>US Stock Newsletter</i>\n"
-        f"🗓 {date_str}\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📰 <b>美股日報</b> ── {date_str}\n\n"
         f"🔥 <b>{escape_html(subject)}</b>"
     )
 
@@ -64,22 +61,22 @@ def build_market_card(market: dict, summary: str) -> str:
     return "\n".join(lines)
 
 
-def build_section_block(idx: int, title: str, body: str, sources: list) -> str:
-    """產生單個章節段落。"""
+def build_section_block(idx: int, total: int, title: str, body: str, sources: list) -> str:
+    """產生單個章節段落（含進度編號）。"""
     icons = ["🎯", "🔥", "💡", "📌", "⚡"]
     icon = icons[idx] if idx < len(icons) else "🔹"
 
     title_safe = escape_html(title)
     body_safe = highlight_ticker(escape_html(body))
 
-    text = f"{icon} <b>{title_safe}</b>\n<blockquote>{body_safe}</blockquote>"
+    text = f"{icon} <b>[{idx + 1}/{total}] {title_safe}</b>\n<blockquote>{body_safe}</blockquote>"
 
     if sources:
         links = []
         for i, s in enumerate(sources[:3], 1):
             label = escape_html(getattr(s, "title", "來源")).strip()
-            if len(label) > 15:
-                label = label[:15] + ".."
+            if len(label) > 30:
+                label = label[:29] + ".."
 
             url = getattr(s, "url", "")
             if url:

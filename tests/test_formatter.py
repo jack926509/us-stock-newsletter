@@ -4,8 +4,11 @@ from app.formatter import (
     highlight_ticker,
     get_trend_arrow,
     build_header,
+    build_section_block,
+    build_market_card,
 )
 from datetime import datetime
+
 
 def test_escape_html():
     assert escape_html("A & B") == "A &amp; B"
@@ -28,3 +31,36 @@ def test_build_header():
     header = build_header("今日重點新聞", dt)
     assert "2026/03/08（週日）" in header
     assert "今日重點新聞" in header
+    assert "美股日報" in header
+
+def test_build_section_block_with_numbering():
+    """章節標題應包含進度編號 [1/3]。"""
+    text = build_section_block(0, 3, "NVDA 財報分析", "【NVDA】大漲", [])
+    assert "[1/3]" in text
+    assert "NVDA 財報分析" in text
+
+def test_build_section_block_with_sources():
+    """消息來源應出現在獨立行，以 · 分隔。"""
+    # 使用 SimpleNamespace 模擬 Source 物件，避免導入 models 觸發 config
+    from types import SimpleNamespace
+    sources = [
+        SimpleNamespace(title="Bloomberg News", url="https://example.com/1"),
+        SimpleNamespace(title="Reuters", url="https://example.com/2"),
+    ]
+    text = build_section_block(0, 2, "標題", "正文", sources)
+    assert "\n🔗 " in text
+    assert " · " in text
+    assert "[1]" in text
+    assert "[2]" in text
+
+def test_build_market_card():
+    """大盤快照應顯示漲跌與價格。"""
+    market = {
+        "SPY": {"name": "S&P 500", "price": 5123.45, "change": 0.52},
+        "QQQ": {"name": "Nasdaq 100", "price": 17834.22, "change": -0.23},
+    }
+    card = build_market_card(market, "市場偏多")
+    assert "🟢" in card
+    assert "🔴" in card
+    assert "5,123.45" in card
+    assert "市場偏多" in card
