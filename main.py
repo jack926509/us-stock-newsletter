@@ -16,7 +16,6 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 import pytz
 
-# 新寫好的模組引用
 from app.config import settings, log, TRIGGER_COOLDOWN_SECONDS
 from app.clients import init_http_client, close_http_client
 from app.pipeline import run_newsletter_pipeline
@@ -30,6 +29,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 scheduler = AsyncIOScheduler(timezone=settings.timezone)
 _last_manual_trigger = 0.0
+_background_tasks: set = set()  # 防止背景 task 被 GC 回收
 
 
 @asynccontextmanager
@@ -96,7 +96,9 @@ async def manual_trigger_endpoint(authorization: str = Header(None)):
     _last_manual_trigger = now
     
     # 在背景建立任務（這樣 API 端點不用等完整流跑完就可以回傳）
-    asyncio.create_task(run_newsletter_pipeline())
+    task = asyncio.create_task(run_newsletter_pipeline())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     log.info("收到 `/run` 手動觸發，排入背景任務。")
     
     return {

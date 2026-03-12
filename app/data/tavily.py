@@ -12,7 +12,7 @@ from app.clients import get_http_client
 from app.data.finnhub import DataFetchError
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=False)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def tavily_search(query: str, max_results: int = 3, time_range: str = "week") -> list:
     """
     使用 Tavily API 搜尋新聞，帶有重試機制
@@ -27,7 +27,7 @@ async def tavily_search(query: str, max_results: int = 3, time_range: str = "wee
                 "topic": "news",
                 "max_results": max_results,
                 "time_range": time_range,
-                "include_raw_content": True,
+                "include_raw_content": False,
             },
             timeout=15.0,
         )
