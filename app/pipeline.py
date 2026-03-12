@@ -9,6 +9,7 @@ import asyncio
 
 from app.config import log, settings
 from app.clients import telegram_bot
+from app.formatter import escape_html
 from app.data.finnhub import get_market_data, get_finnhub_news
 from app.data.tavily import tavily_search
 from app.ai.planner import plan_newsletter
@@ -83,7 +84,7 @@ async def run_newsletter_pipeline() -> None:
             # 報錯推送到群組
             await telegram_bot.send_message(
                 chat_id=settings.telegram_chat_id,
-                text=f"⚠️ <b>美股新聞編輯室發生異常</b>\n\n系統生成日報過程中遭遇失敗，請檢查 Zeabur Log。\n<code>{str(e)}</code>",
+                text=f"⚠️ <b>美股新聞編輯室發生異常</b>\n\n系統生成日報過程中遭遇失敗，請檢查 Zeabur Log。\n<code>{escape_html(str(e))}</code>",
                 parse_mode="HTML"
             )
         except Exception as notify_e:

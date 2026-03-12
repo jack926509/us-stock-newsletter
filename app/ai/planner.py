@@ -5,7 +5,6 @@ AI 規劃模組 (Planning)
 利用 Pydantic 進行 Schema 驗證。
 """
 
-import json
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import ValidationError
 

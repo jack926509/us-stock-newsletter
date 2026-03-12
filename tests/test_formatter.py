@@ -26,5 +26,5 @@ def test_build_header():
     # 2026-03-08 is Sunday (週日)
     dt = datetime(2026, 3, 8)
     header = build_header("今日重點新聞", dt)
-    assert "2026-03-08（週日）" in header
+    assert "2026/03/08（週日）" in header
     assert "今日重點新聞" in header
