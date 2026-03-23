@@ -10,7 +10,7 @@
 |------|------|
 | 🤖 **多層 AI Agent** | Planner → Writer → Editor 三段式分工，品質遠優於單一 prompt |
 | 🛡️ **高可用容錯** | Tenacity 自動重試 + Pydantic JSON 格式驗證，防止 AI 幻覺破壞流程 |
-| 💰 **成本最佳化** | 規劃/撰寫使用 `gpt-4o-mini`，最終編輯才升級 `gpt-4o`，節省高達 80% API 費用 |
+| 💰 **成本最佳化** | 規劃/撰寫使用 `claude-haiku-4-5`，最終編輯才升級 `claude-sonnet-4-6`，節省高達 80% API 費用 |
 | ⚡ **並行加速** | 市場報價、Tavily 搜尋、章節撰寫全部 `asyncio.gather` 並行執行 |
 | 🔒 **防護機制** | Semaphore 控制 OpenAI 並發上限、手動觸發冷卻 300 秒防刷 |
 | 📱 **精緻 Telegram UI** | 智能訊息合併、章節進度編號、Blockquote 層次、隱藏式免責聲明 |
@@ -32,13 +32,13 @@
    │
    ├─ Step 1 ──▶ 【並行】Finnhub 市場報價 + Finnhub 突發新聞
    │
-   ├─ Step 2 ──▶ GPT-4o-mini Planner → 主標題 + 焦點主題
+   ├─ Step 2 ──▶ claude-haiku-4-5 Planner → 主標題 + 焦點主題
    │
    ├─ Step 3 ──▶ 【並行】Tavily Deep Search × 焦點數量
    │
-   ├─ Step 4 ──▶ 【並行 Semaphore=3】GPT-4o-mini Writer × 焦點數量
+   ├─ Step 4 ──▶ 【並行 Semaphore=3】claude-haiku-4-5 Writer × 焦點數量
    │
-   ├─ Step 5 ──▶ GPT-4o Editor → 整合 JSON + Pydantic 驗證
+   ├─ Step 5 ──▶ claude-sonnet-4-6 Editor → 整合 + Pydantic 結構化輸出
    │
    └─ Step 6 ──▶ Telegram 格式化 → 智能合併 → 推播
 ```
@@ -47,10 +47,10 @@
 graph TD
     A[APScheduler<br/>週一到五 08:00 Asia/Taipei] --> B
     B[Finnhub API<br/>市場報價 + 突發新聞] --> C
-    C[GPT-4o-mini Planner<br/>主標題 + 焦點主題] --> D
+    C[claude-haiku-4-5 Planner<br/>主標題 + 焦點主題] --> D
     D[Tavily Search ×N<br/>深度新聞搜尋 並行] --> E
-    E[GPT-4o-mini Writer ×N<br/>章節草稿 並行+Semaphore] --> F
-    F[GPT-4o Editor<br/>整合 Newsletter JSON] --> G
+    E[claude-haiku-4-5 Writer ×N<br/>章節草稿 並行+Semaphore] --> F
+    F[claude-sonnet-4-6 Editor<br/>Pydantic 結構化輸出] --> G
     G[Telegram Bot<br/>智能合併 + 推播]
 ```
 
@@ -100,7 +100,7 @@ us-stock-newsletter/
 
 ### Step 2 — AI 規劃主題（Planner）
 
-`ai/planner.py` 將新聞摘要送給 **GPT-4o-mini**，輸出：
+`ai/planner.py` 將新聞摘要送給 **claude-haiku-4-5**，輸出：
 
 ```json
 {
@@ -109,7 +109,7 @@ us-stock-newsletter/
 }
 ```
 
-透過 **Pydantic `NewsletterPlan`** 驗證，格式不符自動 retry。
+透過 `messages.parse()` 直接回傳 **Pydantic `NewsletterPlan`** 物件，無需手動解析 JSON。
 
 ### Step 3 — 深度搜尋（Tavily，並行）
 
@@ -119,7 +119,7 @@ us-stock-newsletter/
 
 ### Step 4 — AI 章節撰寫（Writer，並行 + Semaphore）
 
-`ai/writer.py` 以 **GPT-4o-mini** 為每個有效主題撰寫分析章節：
+`ai/writer.py` 以 **claude-haiku-4-5** 為每個有效主題撰寫分析章節：
 
 - `asyncio.gather` 並行啟動所有 Writer
 - `asyncio.Semaphore(3)` 限制同時最多 3 個 OpenAI 請求，避免 429
@@ -127,7 +127,7 @@ us-stock-newsletter/
 
 ### Step 5 — AI 最終編輯（Editor）
 
-`ai/editor.py` 以 **GPT-4o** 將章節草稿整合為結構化 JSON：
+`ai/editor.py` 以 **claude-sonnet-4-6** 將章節草稿整合為結構化輸出：
 
 ```json
 {
@@ -144,7 +144,7 @@ us-stock-newsletter/
 }
 ```
 
-透過 **Pydantic `Newsletter`** 嚴格驗證，最多重試 3 次（指數退避 3–15 秒）。
+透過 `messages.parse()` 直接回傳 **Pydantic `Newsletter`** 物件，最多重試 3 次（指數退避 3–15 秒）。
 
 ### Step 6 — Telegram 推播（智能合併）
 
@@ -169,7 +169,7 @@ us-stock-newsletter/
 
 | 變數 | 必填 | 預設值 | 說明 | 取得方式 |
 |------|:---:|--------|------|---------|
-| `OPENAI_API_KEY` | ✅ | — | OpenAI API Key | [platform.openai.com](https://platform.openai.com) |
+| `ANTHROPIC_API_KEY` | ✅ | — | Anthropic API Key | [console.anthropic.com](https://console.anthropic.com) |
 | `FINNHUB_API_KEY` | ✅ | — | Finnhub API Key | [finnhub.io](https://finnhub.io) |
 | `TAVILY_API_KEY` | ✅ | — | Tavily API Key | [tavily.com](https://tavily.com) |
 | `TELEGRAM_TOKEN` | ✅ | — | Telegram Bot Token | `@BotFather` |
@@ -270,7 +270,19 @@ uvicorn main:app --reload
 | 過時註解清理 | `main.py` 移除「新寫好的模組引用」過時註解 |
 | Tavily 頻寬節省 | `include_raw_content` 改為 `False`，Writer 未使用完整原文 |
 
-### v4 — Telegram UX 重構（本次）
+### v5 — Anthropic API 遷移（本次）
+
+| 項目 | 說明 |
+|------|------|
+| AI 供應商切換 | `openai` → `anthropic`，`AsyncOpenAI` → `AsyncAnthropic` |
+| 模型升級 | `gpt-4o-mini` → `claude-haiku-4-5`（Planner + Writer）；`gpt-4o` → `claude-sonnet-4-6`（Editor） |
+| 結構化輸出簡化 | `response_format={"type":"json_object"}` + 手動 `model_validate_json()` → `messages.parse(output_format=PydanticModel)`，直接回傳 Pydantic 物件 |
+| Timeout 集中管理 | 各 call 分散的 `timeout=` 改為在 `AsyncAnthropic(timeout=90.0)` 統一設定 |
+| 錯誤鏈保留 | Writer/Editor 的 `raise ... from e` 保留原始例外鏈，方便追查根因 |
+| ValidationError 移除 | `messages.parse()` 內建驗證，planner/editor 不再需要 `except ValidationError` 分支 |
+| 環境變數 | `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` |
+
+### v4 — Telegram UX 重構
 
 | 項目 | 說明 |
 |------|------|
