@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     """所有必要環境變數，啟動時自動驗證。"""
 
     # API Keys（必填）
-    openai_api_key: str = Field(..., description="OpenAI API Key")
+    anthropic_api_key: str = Field(..., description="Anthropic API Key")
     finnhub_api_key: str = Field(..., description="Finnhub API Key")
     tavily_api_key: str = Field(..., description="Tavily API Key")
     telegram_token: str = Field(..., description="Telegram Bot Token")

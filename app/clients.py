@@ -1,18 +1,21 @@
 """
 單例客戶端初始化
 
-集中管理 httpx / OpenAI / Telegram 客戶端的生命週期。
+集中管理 httpx / Anthropic / Telegram 客戶端的生命週期。
 httpx.AsyncClient 在 FastAPI lifespan 中初始化和關閉。
 """
 
 import httpx
 import telegram
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 
 from app.config import settings
 
 # ─── Singleton Clients ────────────────────────────────────────
-openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+anthropic_client = AsyncAnthropic(
+    api_key=settings.anthropic_api_key,
+    timeout=90.0,  # 涵蓋 Editor 最長呼叫時間
+)
 telegram_bot = telegram.Bot(token=settings.telegram_token)
 
 # httpx client 需要在 async context 中初始化，由 lifespan 管理

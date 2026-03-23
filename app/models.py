@@ -1,7 +1,8 @@
 """
 Pydantic 資料模型 / Schema 驗證
 
-用於驗證 OpenAI 回傳的 JSON 結構，避免格式不符時導致整個流程崩潰。
+用於 Anthropic messages.parse() 的結構化輸出驗證，
+確保 AI 回傳格式正確，避免格式不符導致後續流程崩潰。
 """
 
 from pydantic import BaseModel, Field
