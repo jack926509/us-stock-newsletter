@@ -2,10 +2,10 @@
 AI 編輯模組 (Editor)
 
 將生成的章節與市場快照組合成結構化輸出。
-使用 Anthropic messages.parse() + Pydantic 強型別驗證，
-直接取得 Newsletter 物件，無需手動解析 JSON。
+使用 Anthropic messages.create() + JSON 解析 + Pydantic 強型別驗證。
 """
 
+import json
 from datetime import datetime
 import pytz
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -28,7 +28,7 @@ async def edit_newsletter(title: str, sections: list, market: dict) -> Newslette
     ])
 
     try:
-        resp = await anthropic_client.messages.parse(
+        resp = await anthropic_client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2500,
             system=(
@@ -37,12 +37,23 @@ async def edit_newsletter(title: str, sections: list, market: dict) -> Newslette
                 f"大盤數據: {market_snapshot}\n\n"
                 "規則：body/insights 只輸出純文字，不含任何 HTML；"
                 "sections 數量恰好符合傳入的章節數；每個 sources 最多 3 筆；"
-                "股票代碼用【TICKER】包住；subject 限 15 字內。"
+                "股票代碼用【TICKER】包住；subject 限 15 字內。\n\n"
+                "必須以 JSON 格式回覆，格式如下：\n"
+                '{"subject": "主旨", "market_summary": "大盤摘要", '
+                '"sections": [{"title": "...", "body": "...", "sources": [{"title": "...", "url": "..."}]}], '
+                '"insights": "投資啟示"}\n'
+                "不輸出任何其他文字。"
             ),
             messages=[{"role": "user", "content": f"主標題: {title}\n\n所有章節內容:\n{sections_text}"}],
-            output_format=Newsletter,
         )
-        return resp.parsed_output
+        raw = resp.content[0].text.strip()
+        # 移除可能的 markdown code block
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+        return Newsletter(**data)
 
     except Exception as e:
         log.error("Failed to edit newsletter: %s", e)
