@@ -9,11 +9,13 @@
 | 特色 | 說明 |
 |------|------|
 | 🤖 **多層 AI Agent** | Planner → Writer → Editor 三段式分工，品質遠優於單一 prompt |
-| 🛡️ **高可用容錯** | Tenacity 自動重試 + Pydantic JSON 格式驗證，防止 AI 幻覺破壞流程 |
-| 💰 **成本最佳化** | 規劃/撰寫使用 `claude-haiku-4-5`，最終編輯才升級 `claude-sonnet-4-6`，節省高達 80% API 費用 |
-| ⚡ **並行加速** | 市場報價、Tavily 搜尋、章節撰寫全部 `asyncio.gather` 並行執行 |
-| 🔒 **防護機制** | Semaphore 控制 OpenAI 並發上限、手動觸發冷卻 300 秒防刷 |
-| 📱 **精緻 Telegram UI** | 智能訊息合併、章節進度編號、Blockquote 層次、隱藏式免責聲明 |
+| 🧠 **ai-hedge-fund 整合** | 內嵌 [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) 為分析大腦，Buffett / 基本面 / 技術面 / 情緒多位 AI 分析師同步給出個股 signal |
+| 📋 **watchlist.json** | 自選股清單放在 repo，於 GitHub 網頁直接編輯即可更新，Zeabur webhook 自動重新部署 |
+| 🛡️ **高可用容錯** | Tenacity 自動重試 + Pydantic JSON 格式驗證 + hedge fund adapter 降級機制，防止 AI 幻覺破壞流程 |
+| 💰 **成本最佳化** | 規劃/撰寫用 `claude-haiku-4-6`，最終編輯升級 `claude-sonnet-4-6`，節省大量 API 費用 |
+| ⚡ **並行加速** | 市場報價、Tavily 搜尋、章節撰寫、個股分析全部 `asyncio.gather` 並行執行 |
+| 🔒 **防護機制** | Semaphore 控制並發上限、手動觸發冷卻 300 秒防刷 |
+| 📱 **精緻 Telegram UI** | 智能訊息合併、章節進度編號、個股共識卡片、Blockquote 層次、隱藏式免責聲明 |
 
 ---
 
@@ -161,11 +163,39 @@ us-stock-newsletter/
 
 ---
 
+## 📋 自選股管理（watchlist.json）
+
+個股分析清單放在 repo 根目錄的 `watchlist.json`：
+
+```json
+{
+  "tickers": ["AAPL", "MSFT", "NVDA", "GOOGL", "TSLA"],
+  "notes": "免費清單，不需 FINANCIAL_DATASETS_API_KEY"
+}
+```
+
+### 如何更新
+
+1. 於 GitHub 網頁直接打開 `watchlist.json` → 點鉛筆圖示編輯 → commit 到 `main`
+2. Zeabur 會自動偵測 push 並重新部署
+3. 下一次排程（或手動 `/run`）就會以新清單跑 AI 多分析師
+
+### 規則
+
+- ticker 格式：**大寫英文字母 / 數字 / `.` / `-`**，長度 1–10
+- 重複會去重、無效會被過濾
+- **硬上限 10 檔**（防止 LLM 成本爆炸）
+- 清單為空或檔案壞掉會自動 fallback 到 `DEFAULT_WATCHLIST = [AAPL, MSFT, NVDA, GOOGL, TSLA]` 並記 log
+- 預設清單完全落在 Financial Datasets **免費層**，不需付費 key；若加入 META / AMZN / AMD / TSM 等，請於 Zeabur 新增 `FINANCIAL_DATASETS_API_KEY`
+
+---
+
 ## 🚀 部署到 Zeabur
 
 1. Fork 此 repo
 2. 登入 [Zeabur](https://zeabur.com) → New Project → Deploy from GitHub
-3. 在 Variables 設定以下環境變數：
+3. **⚠️ 啟用 Submodule Clone**：Service → Settings → Source → 勾選 "Clone Submodules"（或於 `.zeabur/config.yaml` 設定），讓 Zeabur 在 build 階段自動 checkout `vendor/ai_hedge_fund`
+4. 在 Variables 設定以下環境變數：
 
 | 變數 | 必填 | 預設值 | 說明 | 取得方式 |
 |------|:---:|--------|------|---------|
@@ -178,8 +208,13 @@ us-stock-newsletter/
 | `CRON_MINUTE` | | `0` | 排程觸發分鐘 | — |
 | `TIMEZONE` | | `Asia/Taipei` | 時區 | — |
 | `ADMIN_API_KEY` | | `""` | 手動觸發保護金鑰 | 自行設定高強度隨機字串 |
+| `FINANCIAL_DATASETS_API_KEY` | | `""` | ai-hedge-fund 個股數據源；免費清單不需要 | [financialdatasets.ai](https://financialdatasets.ai) |
+| `HEDGE_FUND_ANALYSTS` | | `warren_buffett,fundamentals,technicals,sentiment` | 啟用的 AI 分析師（逗號分隔） | — |
+| `HEDGE_FUND_MODEL` | | `claude-haiku-4-6` | ai-hedge-fund 內部用的 Claude 模型 | — |
+| `HEDGE_FUND_TIMEOUT` | | `240` | 整輪個股分析超時秒數 | — |
 
 > ⚠️ 系統在**啟動時**即驗證所有必填變數，缺少任何 Key 服務會立即報錯，不會在運行途中才隱晦失敗。
+> ⚠️ `ANTHROPIC_API_KEY` 會**同時**被主 pipeline 與 ai-hedge-fund 使用，不需要額外 OpenAI key。
 
 ---
 
@@ -217,18 +252,24 @@ curl -X POST https://your-service.zeabur.app/run
 ## 💻 本地開發
 
 ```bash
+# 0. Clone 時一定要帶 --recurse-submodules 才會抓到 vendor/ai_hedge_fund
+git clone --recurse-submodules https://github.com/jack926509/us-stock-newsletter.git
+cd us-stock-newsletter
+# 已經 clone 過但沒有 submodule：
+# git submodule update --init --recursive
+
 # 1. 建立虛擬環境
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-# 2. 安裝套件
+# 2. 安裝套件（會同時裝 langgraph / langchain / langchain-anthropic 供 ai-hedge-fund 用）
 pip install -r requirements.txt
 
 # 3. 設定環境變數
 cp .env.example .env
 # 編輯 .env 填入各 API Key
 
-# 4. 執行單元測試（12 項）
+# 4. 執行單元測試（32 項）
 pytest tests/ -v
 
 # 5. 啟動服務

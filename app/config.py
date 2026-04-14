@@ -6,8 +6,9 @@
 """
 
 import logging
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
-from pydantic import Field
 
 # ─── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -40,6 +41,41 @@ class Settings(BaseSettings):
     # 服務端口
     port: int = Field(default=8080, description="服務監聽端口")
 
+    # ─── ai-hedge-fund 整合（全部為 optional） ─────────────────
+    financial_datasets_api_key: str = Field(
+        default="",
+        description="Financial Datasets API Key（預設免費清單 AAPL/MSFT/NVDA/GOOGL/TSLA 不需要填）",
+    )
+    hedge_fund_analysts: list[str] = Field(
+        default_factory=lambda: [
+            "warren_buffett",
+            "fundamentals",
+            "technicals",
+            "sentiment",
+        ],
+        description="ai-hedge-fund 要啟用的分析師列表（env 用逗號分隔）",
+    )
+    hedge_fund_model: str = Field(
+        default="claude-haiku-4-6",
+        description="ai-hedge-fund 使用的 Claude 模型",
+    )
+    hedge_fund_timeout: int = Field(
+        default=240,
+        description="ai-hedge-fund 整輪分析的 timeout（秒）",
+    )
+    watchlist_path: str = Field(
+        default="watchlist.json",
+        description="自選股清單檔案路徑（相對於 repo 根目錄）",
+    )
+
+    @field_validator("hedge_fund_analysts", mode="before")
+    @classmethod
+    def _split_analysts(cls, v):
+        """支援從 env 讀入逗號字串，自動拆成 list。"""
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
@@ -66,3 +102,9 @@ MARKET_SYMBOLS = {
 
 # 冷卻時間（秒），防止手動觸發過於頻繁
 TRIGGER_COOLDOWN_SECONDS = 300
+
+# ─── 自選股 / ai-hedge-fund 相關常數 ───────────────────────────
+# Financial Datasets API 免費層覆蓋的 ticker；若 watchlist.json 缺失或壞掉則 fallback
+DEFAULT_WATCHLIST: tuple[str, ...] = ("AAPL", "MSFT", "NVDA", "GOOGL", "TSLA")
+# watchlist 硬上限，避免 LLM 呼叫成本失控
+MAX_WATCHLIST_SIZE = 10

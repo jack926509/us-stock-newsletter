@@ -88,6 +88,104 @@ def build_section_block(idx: int, total: int, title: str, body: str, sources: li
     return text
 
 
+_ACTION_EMOJI = {
+    "buy": "🟢",
+    "cover": "🟢",
+    "sell": "🔴",
+    "short": "🔴",
+    "hold": "🟡",
+}
+
+_SIGNAL_EMOJI = {
+    "bullish": "⬆️",
+    "bearish": "⬇️",
+    "neutral": "➡️",
+}
+
+_AGENT_DISPLAY = {
+    "warren_buffett": "Warren Buffett",
+    "peter_lynch": "Peter Lynch",
+    "charlie_munger": "Charlie Munger",
+    "stanley_druckenmiller": "Druckenmiller",
+    "ben_graham": "Ben Graham",
+    "bill_ackman": "Bill Ackman",
+    "cathie_wood": "Cathie Wood",
+    "michael_burry": "Michael Burry",
+    "phil_fisher": "Phil Fisher",
+    "mohnish_pabrai": "Mohnish Pabrai",
+    "nassim_taleb": "Nassim Taleb",
+    "aswath_damodaran": "Aswath Damodaran",
+    "rakesh_jhunjhunwala": "Rakesh Jhunjhunwala",
+    "fundamentals": "基本面分析",
+    "fundamentals_analyst_agent": "基本面分析",
+    "technicals": "技術面分析",
+    "technical_analyst_agent": "技術面分析",
+    "sentiment": "市場情緒",
+    "sentiment_analyst_agent": "市場情緒",
+    "news_sentiment": "新聞情緒",
+    "news_sentiment_agent": "新聞情緒",
+    "valuation": "估值分析",
+    "valuation_analyst_agent": "估值分析",
+    "growth_agent": "成長分析",
+    "growth_analyst_agent": "成長分析",
+    "risk_management_agent": "風控評估",
+    "portfolio_management_agent": "組合管理",
+}
+
+
+def _agent_display(agent: str) -> str:
+    """把 ai-hedge-fund 的內部 key 轉成顯示名稱。"""
+    key = agent.lower().strip()
+    if key in _AGENT_DISPLAY:
+        return _AGENT_DISPLAY[key]
+    # 去掉 _agent / _analyst_agent 後綴再找一次
+    stripped = re.sub(r"_(analyst_)?agent$", "", key)
+    if stripped in _AGENT_DISPLAY:
+        return _AGENT_DISPLAY[stripped]
+    return agent.replace("_", " ").title()
+
+
+def build_verdicts_card(verdicts: list) -> str:
+    """產生 AI 分析師個股共識區塊。
+
+    接受 list[TickerVerdict]（避免 import 循環，型別不強制）。
+    空 list 時回傳空字串，讓 sender 自動略過。
+    """
+    if not verdicts:
+        return ""
+
+    lines = ["📊 <b>AI 分析師個股共識</b>", ""]
+    for v in verdicts:
+        ticker = escape_html(getattr(v, "ticker", ""))
+        action = str(getattr(v, "action", "hold")).lower()
+        emoji = _ACTION_EMOJI.get(action, "🟡")
+        conf = int(round(float(getattr(v, "confidence", 0.0)) * 100))
+        action_upper = escape_html(action.upper())
+
+        lines.append(
+            f"{emoji} <b>{ticker}</b> · {action_upper} · 信心 {conf}%"
+        )
+
+        reasoning = escape_html((getattr(v, "reasoning", "") or "")[:180])
+        if reasoning:
+            lines.append(f"<blockquote>{reasoning}</blockquote>")
+
+        signals = getattr(v, "signals", []) or []
+        for s in signals[:4]:
+            s_signal = str(getattr(s, "signal", "neutral")).lower()
+            s_emoji = _SIGNAL_EMOJI.get(s_signal, "➡️")
+            s_conf = int(round(float(getattr(s, "confidence", 0.0)) * 100))
+            name = escape_html(_agent_display(getattr(s, "agent", "")))
+            reason = escape_html((getattr(s, "reasoning", "") or "")[:90])
+            lines.append(
+                f"  {s_emoji} <i>{name}</i> <code>{s_conf}%</code>：{reason}"
+            )
+
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 def build_footer(insights: str) -> str:
     """產生底部免責與投資啟示。"""
     insights_safe = highlight_ticker(escape_html(insights))

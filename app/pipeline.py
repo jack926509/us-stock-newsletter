@@ -12,36 +12,49 @@ from app.clients import telegram_bot
 from app.formatter import escape_html
 from app.data.finnhub import get_market_data, get_finnhub_news
 from app.data.tavily import tavily_search
+from app.data.watchlist import load_watchlist
 from app.ai.planner import plan_newsletter
 from app.ai.writer import write_section
 from app.ai.editor import edit_newsletter
+from app.ai.hedge_fund import run_hedge_fund_analysis
 from app.sender import send_newsletter_to_telegram
 
 
 async def run_newsletter_pipeline() -> None:
     """執行美股日報自動化完整流程"""
     log.info("🚀 開始生成美股日報流程...")
-    
+
     try:
         # 1. 取得市場大盤與突發新聞
         market_data, finnhub_news = await asyncio.gather(
             get_market_data(),
             get_finnhub_news(category="general", count=5),
         )
-        
+
         # 2. AI 規劃主題
         log.info("初步市場數據與新聞就緒，讓 AI 進行規劃...")
         plan = await plan_newsletter(finnhub_news)
         log.info("AI 規劃主旨: %s (焦點: %s)", plan.title, plan.topics)
-        
-        # 3. 對每個主題進行 Tavily 深度搜索
-        log.info("正針對 %d 個焦點使用 Tavily 深層搜索資料...", len(plan.topics))
-        research_tasks = [
-            tavily_search(topic, max_results=3, time_range="month")
-            for topic in plan.topics
-        ]
-        research_results = await asyncio.gather(*research_tasks, return_exceptions=True)
-        
+
+        # 2.5 讀取自選股並**與 Tavily 並行**啟動 ai-hedge-fund 分析
+        watchlist = load_watchlist()
+
+        # 3. 對每個主題進行 Tavily 深度搜索（與 hedge fund 並行）
+        log.info(
+            "正針對 %d 個焦點使用 Tavily 深層搜索資料，同時啟動 %d 檔自選股 AI 多分析師分析...",
+            len(plan.topics),
+            len(watchlist),
+        )
+        research_task = asyncio.gather(
+            *[
+                tavily_search(topic, max_results=3, time_range="month")
+                for topic in plan.topics
+            ],
+            return_exceptions=True,
+        )
+        hedge_task = run_hedge_fund_analysis(watchlist)
+        research_results, verdicts = await asyncio.gather(research_task, hedge_task)
+
         valid_topics = []
         valid_researches = []
         for i, res in enumerate(research_results):
@@ -51,13 +64,13 @@ async def run_newsletter_pipeline() -> None:
                 continue
             valid_topics.append(topic)
             valid_researches.append(res)
-            
+
         if not valid_topics:
             raise RuntimeError("所有的主題搜尋都失敗，無法進行下一步。")
-            
-        # 4. 對每個有效主題撰寫分析章節 (設定並發限制避免 OpenAI 429 Error)
+
+        # 4. 對每個有效主題撰寫分析章節 (設定並發限制避免 429 Error)
         log.info("Tavily 搜索完成，開始並行撰寫各主題分析章節...")
-        sem = asyncio.Semaphore(3)  # 最多同時發 3 個 OpenAI 請求
+        sem = asyncio.Semaphore(3)  # 最多同時發 3 個 Anthropic 請求
 
         async def _bounded_write(*args):
             async with sem:
@@ -68,10 +81,15 @@ async def run_newsletter_pipeline() -> None:
             for i in range(len(valid_topics))
         ]
         sections = list(await asyncio.gather(*writer_tasks))
-        
-        # 5. 最終 AI 編輯合成 JSON 電子報格式
-        log.info("所有章節草稿已就緒，交由 AI 主編排版合成最終報表...")
-        newsletter = await edit_newsletter(plan.title, sections, market_data)
+
+        # 5. 最終 AI 編輯合成 JSON 電子報格式（同時融入個股 verdicts）
+        log.info(
+            "所有章節草稿已就緒，交由 AI 主編排版合成最終報表（含 %d 份個股 verdict）...",
+            len(verdicts),
+        )
+        newsletter = await edit_newsletter(
+            plan.title, sections, market_data, verdicts=verdicts
+        )
         
         # 6. 透過 Telegram 推播
         log.info("排版完成，開始推送 Telegram 頻道...")
