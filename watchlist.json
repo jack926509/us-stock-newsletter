@@ -1,0 +1,4 @@
+{
+  "tickers": ["AAPL", "MSFT", "NVDA", "GOOGL", "TSLA"],
+  "notes": "自選股清單 — 直接在 GitHub 網頁編輯此檔並 commit，Zeabur 會自動重新部署。預設 5 檔為 Financial Datasets 免費層覆蓋範圍。若要加入其他 ticker，請先於 Zeabur 設定 FINANCIAL_DATASETS_API_KEY 環境變數。硬上限 10 檔以控制 API 成本。"
+}

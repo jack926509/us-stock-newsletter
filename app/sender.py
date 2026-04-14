@@ -12,7 +12,13 @@ import pytz
 from app.config import settings, log, TELEGRAM_MAX_LEN
 from app.clients import telegram_bot
 from app.models import Newsletter
-from app.formatter import build_header, build_market_card, build_section_block, build_footer
+from app.formatter import (
+    build_footer,
+    build_header,
+    build_market_card,
+    build_section_block,
+    build_verdicts_card,
+)
 
 
 def _merge_blocks(blocks: list[str], max_len: int) -> list[str]:
@@ -99,6 +105,11 @@ async def send_newsletter_to_telegram(newsletter: Newsletter, market_data: dict)
         blocks.append(
             build_section_block(i, total, section.title, section.body, section.sources)
         )
+
+    # 在章節之後、footer 之前插入 AI 多分析師個股共識卡片（若有）
+    verdicts_block = build_verdicts_card(newsletter.verdicts)
+    if verdicts_block:
+        blocks.append(verdicts_block)
 
     blocks.append(build_footer(newsletter.insights))
 
