@@ -209,7 +209,7 @@ us-stock-newsletter/
 | `TIMEZONE` | | `Asia/Taipei` | 時區 | — |
 | `ADMIN_API_KEY` | | `""` | 手動觸發保護金鑰 | 自行設定高強度隨機字串 |
 | `FINANCIAL_DATASETS_API_KEY` | | `""` | ai-hedge-fund 個股數據源；免費清單不需要 | [financialdatasets.ai](https://financialdatasets.ai) |
-| `HEDGE_FUND_ANALYSTS` | | `warren_buffett,fundamentals,technicals,sentiment` | 啟用的 AI 分析師（逗號分隔） | — |
+| `HEDGE_FUND_ANALYSTS` | | `warren_buffett,fundamentals_analyst,technical_analyst,sentiment_analyst` | 啟用的 AI 分析師（逗號分隔，亦接受短別名 fundamentals/technicals/sentiment） | — |
 | `HEDGE_FUND_MODEL` | | `claude-haiku-4-6` | ai-hedge-fund 內部用的 Claude 模型 | — |
 | `HEDGE_FUND_TIMEOUT` | | `240` | 整輪個股分析超時秒數 | — |
 
