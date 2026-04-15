@@ -9,6 +9,8 @@ import asyncio
 from datetime import datetime
 import pytz
 
+from telegram.error import NetworkError, RetryAfter, TimedOut
+
 from app.config import settings, log, TELEGRAM_MAX_LEN
 from app.clients import telegram_bot
 from app.models import Newsletter
@@ -46,18 +48,48 @@ def _merge_blocks(blocks: list[str], max_len: int) -> list[str]:
     return messages
 
 
+_TELEGRAM_SEND_RETRIES = 4
+_TELEGRAM_RETRY_BASE_DELAY = 2.0
+
+
 async def _send_html_chunk(text: str) -> None:
-    """傳送單一 HTML 文字，不分段。"""
-    try:
-        await telegram_bot.send_message(
-            chat_id=settings.telegram_chat_id,
-            text=text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
-    except Exception as e:
-        log.error("Failed to send Telegram chunk: %s", e)
-        raise
+    """傳送單一 HTML 文字。對網路類錯誤做指數退避重試，避免單次 TimedOut 就丟掉整份日報。"""
+    last_exc: Exception | None = None
+    for attempt in range(1, _TELEGRAM_SEND_RETRIES + 1):
+        try:
+            await telegram_bot.send_message(
+                chat_id=settings.telegram_chat_id,
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            return
+        except RetryAfter as e:
+            wait = float(getattr(e, "retry_after", 5)) + 1.0
+            log.warning(
+                "Telegram RetryAfter (attempt %d/%d): 等待 %.1fs",
+                attempt, _TELEGRAM_SEND_RETRIES, wait,
+            )
+            await asyncio.sleep(wait)
+            last_exc = e
+        except (TimedOut, NetworkError) as e:
+            wait = _TELEGRAM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            log.warning(
+                "Telegram 網路錯誤 %s (attempt %d/%d): %.1fs 後重試",
+                type(e).__name__, attempt, _TELEGRAM_SEND_RETRIES, wait,
+            )
+            await asyncio.sleep(wait)
+            last_exc = e
+        except Exception as e:
+            log.error("Failed to send Telegram chunk: %s", e)
+            raise
+
+    log.error(
+        "Telegram chunk 送出失敗，已用盡 %d 次重試: %s",
+        _TELEGRAM_SEND_RETRIES, last_exc,
+    )
+    assert last_exc is not None
+    raise last_exc
 
 
 async def _send_html_safe(text: str) -> None:

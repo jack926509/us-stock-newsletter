@@ -33,6 +33,42 @@ if _VENDOR_ROOT.exists() and str(_VENDOR_ROOT) not in sys.path:
 # 在首次 import 前為未使用的 provider 注入 stub 模組。
 # 我們實際只會走到 ChatAnthropic 分支，其他 class 不會被實例化，
 # 所以 stub 只要存在屬性即可。
+# ai-hedge-fund 上游的 ANALYST_CONFIG key（src/utils/analysts.py）
+# 我們允許設定使用者用較短的別名（fundamentals / technicals / sentiment），
+# 在送進 run_hedge_fund 之前自動轉換成上游真實 key，避免 KeyError。
+_ANALYST_ALIASES = {
+    "fundamentals": "fundamentals_analyst",
+    "fundamentals_analyst": "fundamentals_analyst",
+    "technicals": "technical_analyst",
+    "technical": "technical_analyst",
+    "technical_analyst": "technical_analyst",
+    "sentiment": "sentiment_analyst",
+    "sentiment_analyst": "sentiment_analyst",
+    "news_sentiment": "news_sentiment_analyst",
+    "news_sentiment_analyst": "news_sentiment_analyst",
+    "valuation": "valuation_analyst",
+    "valuation_analyst": "valuation_analyst",
+    "growth": "growth_analyst",
+    "growth_analyst": "growth_analyst",
+}
+
+
+def _resolve_analysts(raw: list[str]) -> list[str]:
+    """把 user 友善的短別名轉成 ai-hedge-fund 的真實 key，去重保留順序。"""
+    seen: set[str] = set()
+    resolved: list[str] = []
+    for name in raw:
+        key = (name or "").strip().lower()
+        if not key:
+            continue
+        canonical = _ANALYST_ALIASES.get(key, key)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        resolved.append(canonical)
+    return resolved
+
+
 _STUB_PROVIDERS = {
     "langchain_deepseek": ["ChatDeepSeek"],
     "langchain_google_genai": ["ChatGoogleGenerativeAI"],
@@ -108,6 +144,11 @@ async def run_hedge_fund_analysis(tickers: list[str]) -> list[TickerVerdict]:
         },
     }
 
+    selected_analysts = _resolve_analysts(list(settings.hedge_fund_analysts))
+    if not selected_analysts:
+        log.warning("hedge_fund_analysts 為空或全為未知別名，跳過個股分析")
+        return []
+
     def _run_sync():
         return run_hedge_fund(
             tickers=tickers,
@@ -115,15 +156,16 @@ async def run_hedge_fund_analysis(tickers: list[str]) -> list[TickerVerdict]:
             end_date=end,
             portfolio=portfolio,
             show_reasoning=False,
-            selected_analysts=list(settings.hedge_fund_analysts),
+            selected_analysts=selected_analysts,
             model_name=settings.hedge_fund_model,
             model_provider="Anthropic",
         )
 
     log.info(
-        "🧠 啟動 ai-hedge-fund 分析：%d 檔 × %d 位分析師 (model=%s)",
+        "🧠 啟動 ai-hedge-fund 分析：%d 檔 × %d 位分析師 %s (model=%s)",
         len(tickers),
-        len(settings.hedge_fund_analysts),
+        len(selected_analysts),
+        selected_analysts,
         settings.hedge_fund_model,
     )
 

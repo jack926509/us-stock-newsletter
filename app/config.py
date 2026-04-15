@@ -49,9 +49,9 @@ class Settings(BaseSettings):
     hedge_fund_analysts: list[str] = Field(
         default_factory=lambda: [
             "warren_buffett",
-            "fundamentals",
-            "technicals",
-            "sentiment",
+            "fundamentals_analyst",
+            "technical_analyst",
+            "sentiment_analyst",
         ],
         description="ai-hedge-fund 要啟用的分析師列表（env 用逗號分隔）",
     )

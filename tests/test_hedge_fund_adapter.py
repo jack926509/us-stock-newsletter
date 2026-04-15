@@ -15,6 +15,7 @@ from app.ai.hedge_fund import (  # noqa: E402
     _coerce_signal,
     _extract_reasoning,
     _normalize,
+    _resolve_analysts,
 )
 from app.models import TickerVerdict  # noqa: E402
 
@@ -116,3 +117,28 @@ def test_normalize_decisions_as_json_string():
 def test_normalize_non_dict_input_returns_empty():
     assert _normalize(None, ["AAPL"]) == []
     assert _normalize("oops", ["AAPL"]) == []
+
+
+def test_resolve_analysts_maps_short_aliases_to_canonical_keys():
+    out = _resolve_analysts(
+        ["warren_buffett", "fundamentals", "technicals", "sentiment"]
+    )
+    assert out == [
+        "warren_buffett",
+        "fundamentals_analyst",
+        "technical_analyst",
+        "sentiment_analyst",
+    ]
+
+
+def test_resolve_analysts_dedupes_and_preserves_order():
+    out = _resolve_analysts(
+        ["fundamentals", "fundamentals_analyst", "TECHNICALS", "warren_buffett"]
+    )
+    assert out == ["fundamentals_analyst", "technical_analyst", "warren_buffett"]
+
+
+def test_resolve_analysts_passes_through_unknown_keys():
+    # 未知 key 直接送下去，讓上游決定報錯（保留可擴充性）
+    out = _resolve_analysts(["peter_lynch", "  ", ""])
+    assert out == ["peter_lynch"]
