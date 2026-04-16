@@ -67,7 +67,10 @@ async def edit_newsletter(
     try:
         resp = await anthropic_client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2500,
+            # 加入 verdicts 區塊後 JSON 可能逼近原本的 2500 tokens 上限，
+            # 曾經在 prod 看到 JSONDecodeError: Unterminated string at char 2978。
+            # 拉高到 8000 給足裕量，Sonnet 4.6 單次 8k tokens 成本仍可控。
+            max_tokens=8000,
             system=(
                 f"你是Bloomberg/WSJ風格的主編。整合分析報告為結構化輸出（繁體中文）。\n"
                 f"今日日期: {today}\n"
@@ -92,12 +95,21 @@ async def edit_newsletter(
                 }
             ],
         )
+        # 若 Claude 被 max_tokens 截斷，JSON 必定不完整 — 早點放棄讓 tenacity retry
+        stop_reason = getattr(resp, "stop_reason", None)
+        if stop_reason == "max_tokens":
+            log.warning(
+                "Editor 輸出被 max_tokens 截斷 (stop_reason=max_tokens)，觸發 retry"
+            )
+            raise AIGenerationError("Editor output truncated by max_tokens")
+
         raw = resp.content[0].text.strip()
         # 移除可能的 markdown code block
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
+        raw = raw.strip()
         data = json.loads(raw)
         newsletter = Newsletter(**data)
         # verdicts 直接覆蓋 — 不讓 LLM 生成，避免幻覺

@@ -11,6 +11,7 @@ ai-hedge-fund 的 src/ 使用 `from src.agents...` 絕對匯入，所以
 
 import asyncio
 import json
+import os
 import sys
 import types
 from datetime import date, timedelta
@@ -122,6 +123,16 @@ async def run_hedge_fund_analysis(tickers: list[str]) -> list[TickerVerdict]:
     except Exception as e:  # noqa: BLE001
         log.error("ai-hedge-fund submodule 未就緒或無法 import：%s — 本次跳過個股分析", e)
         return []
+
+    # vendor 的 get_model() 直接 os.getenv("ANTHROPIC_API_KEY")（strict uppercase），
+    # 即使 Zeabur 把 key 設成小寫 env、或 pydantic-settings 讀完後 os.environ 名稱對不上，
+    # 都會噴 "Anthropic API key not found"。
+    # 這裡把已驗證過的 settings.anthropic_api_key 強制寫回 os.environ，確保 vendor 拿得到。
+    if settings.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+        os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+        log.info("已補注 ANTHROPIC_API_KEY 至 os.environ 供 ai-hedge-fund 使用")
+    if settings.financial_datasets_api_key and not os.environ.get("FINANCIAL_DATASETS_API_KEY"):
+        os.environ["FINANCIAL_DATASETS_API_KEY"] = settings.financial_datasets_api_key
 
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=90)).isoformat()
