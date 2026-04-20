@@ -162,24 +162,34 @@ def build_verdicts_card(verdicts: list) -> str:
         conf = int(round(float(getattr(v, "confidence", 0.0)) * 100))
         action_upper = escape_html(action.upper())
 
-        lines.append(
-            f"{emoji} <b>{ticker}</b> · {action_upper} · 信心 {conf}%"
-        )
+        # 標題行：AAPL · BUY · 信心 72%
+        lines.append(f"{emoji} <b>{ticker}</b> · {action_upper} · 信心 {conf}%")
 
-        reasoning = escape_html((getattr(v, "reasoning", "") or "")[:180])
+        # PM 的綜合理由（若有實際內容才顯示）
+        reasoning = (getattr(v, "reasoning", "") or "").strip()
         if reasoning:
-            lines.append(f"<blockquote>{reasoning}</blockquote>")
+            lines.append(f"<blockquote>{escape_html(reasoning[:200])}</blockquote>")
 
+        # 各分析師的訊號（精簡版）
         signals = getattr(v, "signals", []) or []
-        for s in signals[:4]:
-            s_signal = str(getattr(s, "signal", "neutral")).lower()
-            s_emoji = _SIGNAL_EMOJI.get(s_signal, "➡️")
-            s_conf = int(round(float(getattr(s, "confidence", 0.0)) * 100))
-            name = escape_html(_agent_display(getattr(s, "agent", "")))
-            reason = escape_html((getattr(s, "reasoning", "") or "")[:90])
-            lines.append(
-                f"  {s_emoji} <i>{name}</i> <code>{s_conf}%</code>：{reason}"
-            )
+        if signals:
+            sig_parts: list[str] = []
+            for s in signals[:4]:
+                s_signal = str(getattr(s, "signal", "neutral")).lower()
+                s_emoji = _SIGNAL_EMOJI.get(s_signal, "➡️")
+                name = _agent_display(getattr(s, "agent", ""))
+                s_conf = int(round(float(getattr(s, "confidence", 0.0)) * 100))
+                reason = (getattr(s, "reasoning", "") or "").strip()
+
+                # 組裝每位分析師的單行
+                line = f"{s_emoji} <i>{escape_html(name)}</i> {s_conf}%"
+                if reason:
+                    # 截取前 80 字元的摘要
+                    short_reason = escape_html(reason[:80])
+                    line += f"：{short_reason}"
+                sig_parts.append(line)
+
+            lines.append("<blockquote>" + "\n".join(sig_parts) + "</blockquote>")
 
         lines.append("")
 

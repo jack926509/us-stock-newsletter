@@ -47,8 +47,49 @@ def test_extract_reasoning_from_dict_str_none():
     assert _extract_reasoning(None) == ""
     assert _extract_reasoning("plain reason") == "plain reason"
     assert _extract_reasoning({"reasoning": "nested"}) == "nested"
-    out = _extract_reasoning({"reasoning": {"key": "val"}})
-    assert "val" in out
+    assert _extract_reasoning({"error": "Missing price data"}) == "Missing price data"
+
+
+def test_extract_reasoning_fundamentals_subsignals():
+    sig = {
+        "profitability_signal": {
+            "signal": "bullish",
+            "details": "ROE: 143.60%, Net Margin: 27.68%",
+        },
+        "growth_signal": {
+            "signal": "bearish",
+            "details": "Revenue Growth: -2.3%",
+        },
+    }
+    out = _extract_reasoning(sig)
+    assert "profitability" in out
+    assert "ROE" in out
+    assert "growth" in out
+    assert "{" not in out  # 不應包含 raw JSON
+
+
+def test_extract_reasoning_sentiment_subsignals():
+    sig = {
+        "insider_trading": {
+            "signal": "bearish",
+            "confidence": 62,
+            "metrics": {"total_trades": 40},
+        },
+    }
+    out = _extract_reasoning(sig)
+    assert "insider trading" in out
+    assert "↓" in out
+    assert "{" not in out
+
+
+def test_extract_reasoning_technical_subsignals():
+    sig = {
+        "trend_following": {"signal": "bullish", "confidence": 70},
+        "momentum": {"signal": "bearish", "confidence": 45},
+    }
+    out = _extract_reasoning(sig)
+    assert "trend following" in out
+    assert "momentum" in out
 
 
 def test_normalize_full_structure():
@@ -112,6 +153,63 @@ def test_normalize_decisions_as_json_string():
     verdicts = _normalize(raw, ["TSLA"])
     assert verdicts[0].action == "sell"
     assert abs(verdicts[0].confidence - 0.60) < 1e-6
+
+
+def test_normalize_filters_infra_agents():
+    """risk_management_agent / portfolio_management_agent 不應出現在 signals。"""
+    raw = {
+        "decisions": {
+            "AAPL": {"action": "buy", "confidence": 72, "reasoning": "Good"},
+        },
+        "analyst_signals": {
+            "warren_buffett_agent": {
+                "AAPL": {"signal": "bullish", "confidence": 80, "reasoning": "ROE"},
+            },
+            "risk_management_agent": {
+                "AAPL": {"remaining_position_limit": 5000, "reasoning": {"error": "no data"}},
+            },
+            "portfolio_management_agent": {
+                "AAPL": {"signal": "hold", "confidence": 50, "reasoning": "N/A"},
+            },
+        },
+    }
+    verdicts = _normalize(raw, ["AAPL"])
+    agent_names = [s.agent for s in verdicts[0].signals]
+    assert "warren_buffett_agent" in agent_names
+    assert "risk_management_agent" not in agent_names
+    assert "portfolio_management_agent" not in agent_names
+
+
+def test_normalize_derives_action_from_signals_when_pm_default():
+    """PM 給 HOLD/100%/'No valid trade' 時，應從 analyst signals 推導方向。"""
+    raw = {
+        "decisions": {
+            "AAPL": {
+                "action": "hold",
+                "confidence": 100,
+                "reasoning": "No valid trade available",
+            }
+        },
+        "analyst_signals": {
+            "fundamentals_analyst_agent": {
+                "AAPL": {"signal": "bullish", "confidence": 60, "reasoning": "ROE good"},
+            },
+            "sentiment_analyst_agent": {
+                "AAPL": {"signal": "bullish", "confidence": 70, "reasoning": "Insider buy"},
+            },
+            "technical_analyst_agent": {
+                "AAPL": {"signal": "bearish", "confidence": 50, "reasoning": "Trend weak"},
+            },
+        },
+    }
+    verdicts = _normalize(raw, ["AAPL"])
+    v = verdicts[0]
+    # 2 bullish vs 1 bearish → should derive "buy"
+    assert v.action == "buy"
+    # confidence should be average of analysts, not PM's 100%
+    assert v.confidence < 1.0
+    assert v.confidence > 0.0
+    assert v.reasoning == ""  # PM default reasoning cleared
 
 
 def test_normalize_non_dict_input_returns_empty():

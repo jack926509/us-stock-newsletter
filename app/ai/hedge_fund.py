@@ -228,23 +228,90 @@ def _coerce_action(raw: Any) -> str:
 
 
 def _extract_reasoning(sig: Any) -> str:
-    """ai-hedge-fund 的 reasoning 可能是 str / dict / None。"""
+    """ai-hedge-fund 的 reasoning 可能是 str / dict / None。
+
+    各 agent 回傳格式不同：
+    - Warren Buffett / 人格型 agent：直接回傳 str
+    - Fundamentals：{"profitability_signal": {"signal": "...", "details": "..."}, ...}
+    - Sentiment：{"insider_trading": {"signal": "...", "confidence": N, "metrics": {...}}, ...}
+    - Technicals：{"trend_following": {"signal": "...", "confidence": N, "metrics": {...}}, ...}
+    - Risk Manager：{"error": "..."} 或 {"reasoning": {...}}
+
+    統一把嵌套 dict 壓縮成人類可讀的短摘要。
+    """
     if sig is None:
         return ""
     if isinstance(sig, str):
-        return sig
-    if isinstance(sig, dict):
-        r = sig.get("reasoning")
-        if isinstance(r, str):
-            return r
-        if isinstance(r, dict):
-            # 某些 agent 回傳 {key: {"signal":..., "details":...}}
-            try:
-                return json.dumps(r, ensure_ascii=False)[:400]
-            except Exception:  # noqa: BLE001
-                return str(r)[:400]
-        return str(r or "")
-    return str(sig)[:400]
+        return sig.strip()
+    if not isinstance(sig, dict):
+        return str(sig)[:400]
+
+    # 如果有直接的 reasoning key 且是 str，優先用
+    r = sig.get("reasoning")
+    if isinstance(r, str):
+        return r.strip()
+
+    # 如果有 error key（常見於 risk_manager），直接回傳
+    if "error" in sig:
+        return str(sig["error"])[:200]
+
+    # 嵌套 sub-signal dict：
+    # e.g. {"profitability_signal": {"signal": "bullish", "details": "ROE: 143%"}, ...}
+    # e.g. {"insider_trading": {"signal": "bearish", "confidence": 62, "metrics": {...}}, ...}
+    # e.g. {"trend_following": {"signal": "bullish", "confidence": 70, "metrics": {...}}, ...}
+    parts: list[str] = []
+    for key, val in sig.items():
+        if not isinstance(val, dict):
+            continue
+        sub_signal = val.get("signal", "")
+        label = key.replace("_signal", "").replace("_", " ").strip()
+        # 優先用 details（fundamentals 用），否則從 signal 方向 + confidence 組合
+        details = val.get("details")
+        if isinstance(details, str) and details.strip():
+            arrow = {"bullish": "↑", "bearish": "↓"}.get(sub_signal, "→")
+            parts.append(f"{label} {arrow} {details.strip()}")
+        elif sub_signal:
+            arrow = {"bullish": "↑", "bearish": "↓"}.get(sub_signal, "→")
+            conf = val.get("confidence")
+            conf_str = f" {int(conf)}%" if conf is not None else ""
+            parts.append(f"{label}{arrow}{conf_str}")
+
+    if parts:
+        return "；".join(parts[:4])
+
+    # fallback: 如果 reasoning 是 dict 但無法解析
+    if isinstance(r, dict):
+        try:
+            return json.dumps(r, ensure_ascii=False)[:300]
+        except Exception:  # noqa: BLE001
+            return str(r)[:300]
+
+    return ""
+
+
+# 這些是 ai-hedge-fund 的基礎設施 node，不是真正的分析師
+_INFRA_AGENTS = {"risk_management_agent", "portfolio_management_agent", "portfolio_manager"}
+
+# PM 預設回傳「無法操作」的 reasoning 片段（多種可能措辭）
+_PM_DEFAULT_REASONING = {"no valid trade", "insufficient data", "no trade available"}
+
+
+def _is_default_pm_decision(dec: dict[str, Any]) -> bool:
+    """判斷 PM 是否回傳了預設/空操作（HOLD + 高信心 + 無實際理由）。"""
+    action = str(dec.get("action", "")).lower()
+    reasoning = str(dec.get("reasoning", "")).lower()
+    conf = dec.get("confidence", 0)
+    if action != "hold":
+        return False
+    if any(frag in reasoning for frag in _PM_DEFAULT_REASONING):
+        return True
+    # PM 在無法分析時常給 confidence=100
+    try:
+        if float(conf) >= 95:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
 
 
 def _normalize(raw: Any, tickers: list[str]) -> list[TickerVerdict]:
@@ -268,19 +335,24 @@ def _normalize(raw: Any, tickers: list[str]) -> list[TickerVerdict]:
         per_signals: list[AnalystSignal] = []
         if isinstance(analyst_signals, dict):
             for agent_name, ticker_map in analyst_signals.items():
+                # 跳過 risk_manager / portfolio_manager 等基礎設施 node
+                if agent_name in _INFRA_AGENTS:
+                    continue
                 if not isinstance(ticker_map, dict):
                     continue
                 sig = ticker_map.get(ticker)
                 if not sig:
                     continue
+                if not isinstance(sig, dict):
+                    continue
+
+                reasoning_raw = sig.get("reasoning")
                 per_signals.append(
                     AnalystSignal(
                         agent=str(agent_name),
-                        signal=_coerce_signal(sig.get("signal") if isinstance(sig, dict) else None),
-                        confidence=_coerce_confidence(
-                            sig.get("confidence") if isinstance(sig, dict) else 0
-                        ),
-                        reasoning=_extract_reasoning(sig)[:300],
+                        signal=_coerce_signal(sig.get("signal")),
+                        confidence=_coerce_confidence(sig.get("confidence", 0)),
+                        reasoning=_extract_reasoning(reasoning_raw)[:300],
                     )
                 )
 
@@ -290,12 +362,33 @@ def _normalize(raw: Any, tickers: list[str]) -> list[TickerVerdict]:
             if isinstance(raw_dec, dict):
                 dec = raw_dec
 
+        # 如果 PM 回傳的是預設/空操作，用分析師平均信心替代
+        is_default = _is_default_pm_decision(dec)
+        if is_default and per_signals:
+            avg_conf = sum(s.confidence for s in per_signals) / len(per_signals)
+            # 多數看多 → buy, 多數看空 → sell, 否則 hold
+            bull_count = sum(1 for s in per_signals if s.signal == "bullish")
+            bear_count = sum(1 for s in per_signals if s.signal == "bearish")
+            if bull_count > bear_count:
+                derived_action = "buy"
+            elif bear_count > bull_count:
+                derived_action = "sell"
+            else:
+                derived_action = "hold"
+            action = derived_action
+            confidence = avg_conf
+            reasoning = ""
+        else:
+            action = _coerce_action(dec.get("action"))
+            confidence = _coerce_confidence(dec.get("confidence", 0))
+            reasoning = _extract_reasoning(dec.get("reasoning"))[:400]
+
         verdicts.append(
             TickerVerdict(
                 ticker=ticker,
-                action=_coerce_action(dec.get("action")),
-                confidence=_coerce_confidence(dec.get("confidence", 0)),
-                reasoning=_extract_reasoning(dec.get("reasoning"))[:400],
+                action=action,
+                confidence=confidence,
+                reasoning=reasoning,
                 signals=per_signals,
             )
         )
