@@ -1,8 +1,8 @@
 """
 Pydantic 資料模型 / Schema 驗證
 
-用於 Anthropic messages.parse() 的結構化輸出驗證，
-確保 AI 回傳格式正確，避免格式不符導致後續流程崩潰。
+作為 Anthropic tool-use 結構化輸出的 input_schema，
+也作為 pipeline 內部資料傳遞的型別契約。
 """
 
 from typing import Literal
@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 
 class NewsletterPlan(BaseModel):
-    """OpenAI Planning 步驟的輸出格式。"""
+    """Planner 步驟的輸出格式。"""
     title: str = Field(..., description="日報主標題")
     topics: list[str] = Field(..., min_length=1, max_length=5, description="焦點主題列表")
 
@@ -48,8 +48,19 @@ class TickerVerdict(BaseModel):
     signals: list[AnalystSignal] = Field(default_factory=list)
 
 
+class NewsletterDraft(BaseModel):
+    """Editor LLM 直接產生的部分（不含 verdicts，避免 LLM 幻覺自選股觀點）。
+
+    作為 Anthropic tool-use 的 input_schema，pipeline 之後會合成 Newsletter。
+    """
+    subject: str = Field(..., description="日報主旨（15 字內）")
+    market_summary: str = Field(default="", description="大盤情緒一句話摘要")
+    sections: list[Section] = Field(..., min_length=1, max_length=5, description="章節列表")
+    insights: str = Field(default="", description="投資啟示與風險提醒")
+
+
 class Newsletter(BaseModel):
-    """最終整合的電子報結構。"""
+    """最終整合的電子報結構（NewsletterDraft + verdicts）。"""
     subject: str = Field(..., description="日報主旨")
     market_summary: str = Field(default="", description="大盤情緒一句話摘要")
     sections: list[Section] = Field(..., min_length=1, max_length=5, description="章節列表")

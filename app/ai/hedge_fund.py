@@ -101,12 +101,19 @@ def _install_provider_stubs() -> None:
         sys.modules[module_name] = stub
 
 
+_runner_cache = None
+
+
 def _import_runner():
-    """延後匯入，避免 submodule 未就緒時 app 啟動就爆掉。"""
+    """延後匯入並快取，避免每次 pipeline 都重跑 stub 安裝與 import。"""
+    global _runner_cache
+    if _runner_cache is not None:
+        return _runner_cache
     _install_provider_stubs()
     from src.main import run_hedge_fund  # type: ignore  # noqa: WPS433
 
-    return run_hedge_fund
+    _runner_cache = run_hedge_fund
+    return _runner_cache
 
 
 async def run_hedge_fund_analysis(tickers: list[str]) -> list[TickerVerdict]:

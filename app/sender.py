@@ -92,20 +92,40 @@ async def _send_html_chunk(text: str) -> None:
     raise last_exc
 
 
+def _find_safe_cut(text: str, max_len: int) -> int:
+    """選擇切割位置，依序偏好：段落 → 行 → 標籤閉合後 → 硬切。
+
+    回傳要切到的索引。最後一層 fallback 仍可能切到標籤內部，但實務上
+    會先命中前三層之一（newsletter 區塊都包含 \n\n 與 </tag>）。
+    """
+    cut = text.rfind("\n\n", 0, max_len)
+    if cut != -1:
+        return cut
+    cut = text.rfind("\n", 0, max_len)
+    if cut != -1:
+        return cut
+    # 找最右邊的 `> `（標籤閉合後接空白），確保不切在標籤中間
+    cut = text.rfind("> ", 0, max_len)
+    if cut != -1:
+        return cut + 1  # 在 `>` 之後切
+    # 退一步找任何 `>`（標籤閉合）
+    cut = text.rfind(">", 0, max_len)
+    if cut != -1:
+        return cut + 1
+    return max_len
+
+
 async def _send_html_safe(text: str) -> None:
     """
-    安全發送：若單則訊息仍超過上限，在段落邊界切割後依序發送。
+    安全發送：若單則訊息仍超過上限，盡量在 HTML 安全邊界切割後依序發送。
     """
     if len(text) <= TELEGRAM_MAX_LEN:
         await _send_html_chunk(text)
         return
 
-    # 超長訊息：在 \n\n 邊界迭代切割
     chunks: list[str] = []
     while len(text) > TELEGRAM_MAX_LEN:
-        cut = text.rfind("\n\n", 0, TELEGRAM_MAX_LEN)
-        if cut == -1:
-            cut = TELEGRAM_MAX_LEN
+        cut = _find_safe_cut(text, TELEGRAM_MAX_LEN)
         chunks.append(text[:cut].rstrip())
         text = text[cut:].lstrip()
     if text:

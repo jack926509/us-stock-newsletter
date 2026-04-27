@@ -53,7 +53,16 @@ async def run_newsletter_pipeline() -> None:
             return_exceptions=True,
         )
         hedge_task = run_hedge_fund_analysis(watchlist)
-        research_results, verdicts = await asyncio.gather(research_task, hedge_task)
+        # 加 return_exceptions 守住 hedge_task 內部約定外的失敗，
+        # 避免 hedge_task 拋例外時連帶 cancel research_task。
+        research_results, verdicts = await asyncio.gather(
+            research_task, hedge_task, return_exceptions=True
+        )
+        if isinstance(research_results, Exception):
+            raise research_results
+        if isinstance(verdicts, Exception):
+            log.error("hedge fund 分析意外拋例外（內部本應自吞）：%s", verdicts)
+            verdicts = []
 
         valid_topics = []
         valid_researches = []
