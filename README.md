@@ -62,7 +62,8 @@ graph TD
 
 ```
 us-stock-newsletter/
-├── main.py                  # FastAPI 入口、APScheduler 排程、API 端點
+├── main.py                  # FastAPI 入口（Zeabur 部署用）：APScheduler + /run 端點
+├── run_once.py              # 單次執行入口（Claude Code routines / cron / 手動跑）
 ├── requirements.txt         # Python 依賴清單
 ├── .env.example             # 環境變數範本
 ├── tests/
@@ -78,9 +79,11 @@ us-stock-newsletter/
     ├── sender.py            # Telegram 智能合併 + 安全推播
     │
     ├── ai/
-    │   ├── planner.py       # Step 2：GPT-4o-mini 規劃主標題與焦點主題
-    │   ├── writer.py        # Step 4：GPT-4o-mini 撰寫章節草稿
-    │   └── editor.py        # Step 5：GPT-4o 整合輸出結構化 JSON
+    │   ├── errors.py        # AIGenerationError 共用例外
+    │   ├── planner.py       # Step 2：claude-haiku-4-5 規劃主標題與焦點主題（tool-use 結構化）
+    │   ├── writer.py        # Step 4：claude-haiku-4-5 撰寫章節草稿
+    │   ├── editor.py        # Step 5：claude-sonnet-4-6 整合輸出結構化（tool-use → NewsletterDraft）
+    │   └── hedge_fund.py    # ai-hedge-fund adapter（vendor submodule，個股 verdicts）
     │
     └── data/
         ├── finnhub.py       # Step 1：Finnhub 市場指數報價 + 突發新聞
@@ -111,7 +114,7 @@ us-stock-newsletter/
 }
 ```
 
-透過 `messages.parse()` 直接回傳 **Pydantic `NewsletterPlan`** 物件，無需手動解析 JSON。
+透過 Anthropic **tool-use** 強制結構化輸出（`tool_choice` 指定唯一工具，`input_schema` 由 `NewsletterPlan.model_json_schema()` 產生），直接拿到 schema-valid 的 dict 後 Pydantic 驗證，無需解析 markdown code fence。
 
 ### Step 3 — 深度搜尋（Tavily，並行）
 
@@ -146,7 +149,7 @@ us-stock-newsletter/
 }
 ```
 
-透過 `messages.parse()` 直接回傳 **Pydantic `Newsletter`** 物件，最多重試 3 次（指數退避 3–15 秒）。
+透過 Anthropic **tool-use**（`input_schema` 來自 `NewsletterDraft.model_json_schema()`，verdicts 由 pipeline 注入避免 LLM 幻覺）直接拿到 schema-valid 的結構，最多重試 3 次（指數退避 3–15 秒）。`stop_reason == "max_tokens"` 時主動觸發 retry。
 
 ### Step 6 — Telegram 推播（智能合併）
 
@@ -190,7 +193,58 @@ us-stock-newsletter/
 
 ---
 
-## 🚀 部署到 Zeabur
+## 🤖 部署選項一：Claude Code Routines（推薦）
+
+從 v6 起，可改用 [Claude Code Routines](https://code.claude.com/docs/en/web-scheduled-tasks) 取代 Zeabur 長駐容器。Routines 在 Anthropic 雲端定時 clone repo 並執行你預設的 prompt，無需自己維運伺服器、無 24h container 計費。
+
+### 架構差異
+
+| | Zeabur | Claude Code Routines |
+|---|---|---|
+| 排程 | APScheduler（在 container 內） | Anthropic 雲端排程器 |
+| 入口 | `uvicorn main:app` 長駐 + `/run` HTTP | 每次排程 clone repo 跑 `python run_once.py` |
+| 計費 | Zeabur container hour | Claude 訂閱用量 |
+| 環境變數 | Zeabur Variables | Claude 「Cloud environment」 |
+| 相依套件 | Dockerfile build 時 `pip install` | Routine setup script 一次性安裝（快取） |
+
+### 設定步驟
+
+1. **準備好 GitHub repo**（含 `vendor/ai_hedge_fund` submodule）。Routines 預設 clone default branch，submodule 由 setup script 補拉。
+
+2. **建立 Cloud environment** — 進 [claude.ai](https://claude.ai/) → Settings → Cloud environments → New environment：
+   - 加入下表所有必填環境變數（同 Zeabur 那欄）
+   - **Setup script**：
+     ```bash
+     git submodule update --init --recursive
+     pip install -r requirements.txt
+     ```
+     setup script 結果會被快取，後續 routine run 不會重跑安裝。
+
+3. **建立 Routine** — 進 [claude.ai/code/routines](https://claude.ai/code/routines) → New routine：
+   - **Name**：`美股日報 weekday 08:00 TPE`
+   - **Repository**：選擇你 fork 的 repo
+   - **Environment**：選剛建好的 cloud environment
+   - **Schedule**：選 *Weekdays*；時區設 `Asia/Taipei`、時間 `08:00`（內部會轉成你的本地時區）
+   - **Prompt**（自然語言指令）：
+     ```
+     在 repo 根目錄執行 `python run_once.py`，
+     將 stdout/stderr 輸出印出，並在執行結束後回報 exit code。
+     不要修改任何檔案、不要 commit、不要建 PR。
+     ```
+   - 不需要 `Allow unrestricted branch pushes`，因為這個 routine 不寫回 repo。
+
+4. **驗證** — Routine 頁面有 *Run now* 按鈕；按一下確認能拿到 Telegram 推播。確認 OK 後排程才會生效。
+
+### 限制
+
+- Routines 目前 minimum interval 為 1 hour，但本服務只用 daily 觸發，沒影響。
+- Routines 在 research preview 期間有每日次數上限與 GitHub trigger 上限；對「每天一次」的本服務遠遠夠用。
+- 預估啟動冷啟時間 30s–60s（clone repo + setup script cache miss 時更長）；建議比目標時間早 5 分鐘排程。
+- 因為不是長駐服務，**`/run` 手動觸發 API 與 `/` 健康檢查不可用**。手動觸發改用 routines 頁面的 *Run now* 按鈕。
+
+---
+
+## 🚀 部署選項二：Zeabur
 
 1. Fork 此 repo
 2. 登入 [Zeabur](https://zeabur.com) → New Project → Deploy from GitHub
@@ -317,7 +371,7 @@ uvicorn main:app --reload
 |------|------|
 | AI 供應商切換 | `openai` → `anthropic`，`AsyncOpenAI` → `AsyncAnthropic` |
 | 模型升級 | `gpt-4o-mini` → `claude-haiku-4-5`（Planner + Writer）；`gpt-4o` → `claude-sonnet-4-6`（Editor） |
-| 結構化輸出簡化 | `response_format={"type":"json_object"}` + 手動 `model_validate_json()` → `messages.parse(output_format=PydanticModel)`，直接回傳 Pydantic 物件 |
+| 結構化輸出 | Anthropic SDK 0.49 的 tool-use（`tool_choice` + `input_schema`）取代手動 JSON / markdown code fence 解析 |
 | Timeout 集中管理 | 各 call 分散的 `timeout=` 改為在 `AsyncAnthropic(timeout=90.0)` 統一設定 |
 | 錯誤鏈保留 | Writer/Editor 的 `raise ... from e` 保留原始例外鏈，方便追查根因 |
 | ValidationError 移除 | `messages.parse()` 內建驗證，planner/editor 不再需要 `except ValidationError` 分支 |

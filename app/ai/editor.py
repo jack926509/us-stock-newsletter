@@ -1,19 +1,25 @@
 """
 AI 編輯模組 (Editor)
 
-將生成的章節與市場快照組合成結構化輸出。
-使用 Anthropic messages.create() + JSON 解析 + Pydantic 強型別驗證。
+將章節草稿與市場快照整合為結構化日報。
+使用 Anthropic tool-use 強制 schema-valid 輸出（NewsletterDraft），
+之後在 Python 端合成最終 Newsletter（注入 verdicts 避免 LLM 幻覺）。
 """
 
-import json
 from datetime import datetime
 import pytz
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from app.ai.errors import AIGenerationError
 from app.clients import anthropic_client
 from app.config import settings, log
-from app.models import Newsletter, TickerVerdict
-from app.ai.planner import AIGenerationError
+from app.models import Newsletter, NewsletterDraft, TickerVerdict
+
+_EDITOR_TOOL = {
+    "name": "submit_newsletter",
+    "description": "輸出整合後的美股日報結構（subject / market_summary / sections / insights）。",
+    "input_schema": NewsletterDraft.model_json_schema(),
+}
 
 
 def _format_verdicts_context(verdicts: list[TickerVerdict]) -> str:
@@ -26,7 +32,6 @@ def _format_verdicts_context(verdicts: list[TickerVerdict]) -> str:
         lines.append(f"- {v.ticker} — {v.action.upper()} (信心 {conf_pct}%)")
         if v.reasoning:
             lines.append(f"  綜合理由：{v.reasoning[:200]}")
-        # 每檔最多列 3 個分析師概要，讓 editor 有融合素材
         for s in v.signals[:3]:
             s_conf = int(round(s.confidence * 100))
             lines.append(
@@ -42,10 +47,10 @@ async def edit_newsletter(
     market: dict,
     verdicts: list[TickerVerdict] | None = None,
 ) -> Newsletter:
-    """整合章節內容並輸出符合 Newsletter Pydantic model 的結構。
+    """整合章節內容並輸出 Newsletter。
 
     若傳入 verdicts，editor 會把個股共識融進 market_summary / insights，
-    但 verdicts 欄位本身**不由 LLM 生成**，於回傳前手動覆蓋以避免幻覺。
+    但 verdicts 欄位本身**不由 LLM 生成**，於回傳前由 pipeline 注入。
     """
     verdicts = verdicts or []
     today = datetime.now(pytz.timezone(settings.timezone)).strftime("%Y-%m-%d")
@@ -67,23 +72,16 @@ async def edit_newsletter(
     try:
         resp = await anthropic_client.messages.create(
             model="claude-sonnet-4-6",
-            # 加入 verdicts 區塊後 JSON 可能逼近原本的 2500 tokens 上限，
-            # 曾經在 prod 看到 JSONDecodeError: Unterminated string at char 2978。
-            # 拉高到 8000 給足裕量，Sonnet 4.6 單次 8k tokens 成本仍可控。
             max_tokens=8000,
             system=(
-                f"你是Bloomberg/WSJ風格的主編。整合分析報告為結構化輸出（繁體中文）。\n"
+                f"你是 Bloomberg/WSJ 風格的主編，整合分析報告為結構化輸出（繁體中文）。\n"
                 f"今日日期: {today}\n"
                 f"大盤數據: {market_snapshot}\n\n"
                 "規則：body/insights 只輸出純文字，不含任何 HTML；"
                 "sections 數量恰好符合傳入的章節數；每個 sources 最多 3 筆；"
                 "股票代碼用【TICKER】包住；subject 限 15 字內。\n"
                 + verdicts_rule
-                + "\n必須以 JSON 格式回覆，格式如下：\n"
-                '{"subject": "主旨", "market_summary": "大盤摘要", '
-                '"sections": [{"title": "...", "body": "...", "sources": [{"title": "...", "url": "..."}]}], '
-                '"insights": "投資啟示"}\n'
-                "不輸出任何其他文字。"
+                + "請呼叫 submit_newsletter 工具回傳結果。"
             ),
             messages=[
                 {
@@ -94,28 +92,29 @@ async def edit_newsletter(
                     ),
                 }
             ],
+            tools=[_EDITOR_TOOL],
+            tool_choice={"type": "tool", "name": "submit_newsletter"},
         )
-        # 若 Claude 被 max_tokens 截斷，JSON 必定不完整 — 早點放棄讓 tenacity retry
-        stop_reason = getattr(resp, "stop_reason", None)
-        if stop_reason == "max_tokens":
-            log.warning(
-                "Editor 輸出被 max_tokens 截斷 (stop_reason=max_tokens)，觸發 retry"
-            )
+
+        if getattr(resp, "stop_reason", None) == "max_tokens":
+            log.warning("Editor 輸出被 max_tokens 截斷，觸發 retry")
             raise AIGenerationError("Editor output truncated by max_tokens")
 
-        raw = resp.content[0].text.strip()
-        # 移除可能的 markdown code block
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-        data = json.loads(raw)
-        newsletter = Newsletter(**data)
-        # verdicts 直接覆蓋 — 不讓 LLM 生成，避免幻覺
-        newsletter.verdicts = verdicts
-        return newsletter
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use":
+                draft = NewsletterDraft(**block.input)
+                return Newsletter(
+                    subject=draft.subject,
+                    market_summary=draft.market_summary,
+                    sections=draft.sections,
+                    insights=draft.insights,
+                    verdicts=verdicts,
+                )
 
+        raise AIGenerationError("Editor 未回傳 tool_use 區塊")
+
+    except AIGenerationError:
+        raise
     except Exception as e:
         log.error("Failed to edit newsletter: %s", e)
         raise AIGenerationError(f"Editor error: {e}") from e

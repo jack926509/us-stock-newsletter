@@ -6,9 +6,9 @@ AI 寫手模組 (Writer)
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from app.ai.errors import AIGenerationError
 from app.clients import anthropic_client
 from app.config import log
-from app.ai.planner import AIGenerationError
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
