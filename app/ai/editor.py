@@ -2,23 +2,28 @@
 AI 編輯模組 (Editor)
 
 將章節草稿與市場快照整合為結構化日報。
-使用 Anthropic tool-use 強制 schema-valid 輸出（NewsletterDraft），
+透過 OpenAI 相容的 function calling 強制 schema-valid 輸出（NewsletterDraft），
 之後在 Python 端合成最終 Newsletter（注入 verdicts 避免 LLM 幻覺）。
 """
 
+import json
 from datetime import datetime
+
 import pytz
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.ai.errors import AIGenerationError
-from app.clients import anthropic_client
-from app.config import settings, log
+from app.clients import llm_client
+from app.config import log, settings
 from app.models import Newsletter, NewsletterDraft, TickerVerdict
 
 _EDITOR_TOOL = {
-    "name": "submit_newsletter",
-    "description": "輸出整合後的美股日報結構（subject / market_summary / sections / insights）。",
-    "input_schema": NewsletterDraft.model_json_schema(),
+    "type": "function",
+    "function": {
+        "name": "submit_newsletter",
+        "description": "輸出整合後的美股日報結構（subject / market_summary / sections / insights）。",
+        "parameters": NewsletterDraft.model_json_schema(),
+    },
 }
 
 
@@ -70,39 +75,44 @@ async def edit_newsletter(
     )
 
     try:
-        resp = await anthropic_client.messages.create(
-            model="claude-sonnet-4-6",
+        resp = await llm_client.chat.completions.create(
+            model=settings.editor_model,
             max_tokens=8000,
-            system=(
-                f"你是 Bloomberg/WSJ 風格的主編，整合分析報告為結構化輸出（繁體中文）。\n"
-                f"今日日期: {today}\n"
-                f"大盤數據: {market_snapshot}\n\n"
-                "規則：body/insights 只輸出純文字，不含任何 HTML；"
-                "sections 數量恰好符合傳入的章節數；每個 sources 最多 3 筆；"
-                "股票代碼用【TICKER】包住；subject 限 15 字內。\n"
-                + verdicts_rule
-                + "請呼叫 submit_newsletter 工具回傳結果。"
-            ),
             messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"你是 Bloomberg/WSJ 風格的主編，整合分析報告為結構化輸出（繁體中文）。\n"
+                        f"今日日期: {today}\n"
+                        f"大盤數據: {market_snapshot}\n\n"
+                        "規則：body/insights 只輸出純文字，不含任何 HTML；"
+                        "sections 數量恰好符合傳入的章節數；每個 sources 最多 3 筆；"
+                        "股票代碼用【TICKER】包住；subject 限 15 字內。\n"
+                        + verdicts_rule
+                        + "請呼叫 submit_newsletter 工具回傳結果。"
+                    ),
+                },
                 {
                     "role": "user",
                     "content": (
                         f"主標題: {title}\n\n所有章節內容:\n{sections_text}"
                         + verdicts_context
                     ),
-                }
+                },
             ],
             tools=[_EDITOR_TOOL],
-            tool_choice={"type": "tool", "name": "submit_newsletter"},
+            tool_choice={"type": "function", "function": {"name": "submit_newsletter"}},
         )
 
-        if getattr(resp, "stop_reason", None) == "max_tokens":
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
             log.warning("Editor 輸出被 max_tokens 截斷，觸發 retry")
             raise AIGenerationError("Editor output truncated by max_tokens")
 
-        for block in resp.content:
-            if getattr(block, "type", None) == "tool_use":
-                draft = NewsletterDraft(**block.input)
+        for call in choice.message.tool_calls or []:
+            if call.function.name == "submit_newsletter":
+                args = json.loads(call.function.arguments or "{}")
+                draft = NewsletterDraft(**args)
                 return Newsletter(
                     subject=draft.subject,
                     market_summary=draft.market_summary,
@@ -111,7 +121,7 @@ async def edit_newsletter(
                     verdicts=verdicts,
                 )
 
-        raise AIGenerationError("Editor 未回傳 tool_use 區塊")
+        raise AIGenerationError("Editor 未回傳 tool_call")
 
     except AIGenerationError:
         raise

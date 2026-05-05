@@ -2,7 +2,7 @@
 
 import os
 
-os.environ.setdefault("ANTHROPIC_API_KEY", "test")
+os.environ.setdefault("OPENROUTER_API_KEY", "test")
 os.environ.setdefault("FINNHUB_API_KEY", "test")
 os.environ.setdefault("TAVILY_API_KEY", "test")
 os.environ.setdefault("TELEGRAM_TOKEN", "test")

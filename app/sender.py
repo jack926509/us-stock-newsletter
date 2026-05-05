@@ -12,7 +12,7 @@ import pytz
 from telegram.error import NetworkError, RetryAfter, TimedOut
 
 from app.config import settings, log, TELEGRAM_MAX_LEN
-from app.clients import telegram_bot
+from app.clients import get_telegram_bot
 from app.models import Newsletter
 from app.formatter import (
     build_footer,
@@ -57,7 +57,7 @@ async def _send_html_chunk(text: str) -> None:
     last_exc: Exception | None = None
     for attempt in range(1, _TELEGRAM_SEND_RETRIES + 1):
         try:
-            await telegram_bot.send_message(
+            await get_telegram_bot().send_message(
                 chat_id=settings.telegram_chat_id,
                 text=text,
                 parse_mode="HTML",

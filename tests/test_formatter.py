@@ -1,5 +1,14 @@
+import os
+
 import pytest
-from app.formatter import (
+
+os.environ.setdefault("OPENROUTER_API_KEY", "test")
+os.environ.setdefault("FINNHUB_API_KEY", "test")
+os.environ.setdefault("TAVILY_API_KEY", "test")
+os.environ.setdefault("TELEGRAM_TOKEN", "test")
+os.environ.setdefault("TELEGRAM_CHAT_ID", "test")
+
+from app.formatter import (  # noqa: E402
     escape_html,
     highlight_ticker,
     get_trend_arrow,
@@ -7,7 +16,7 @@ from app.formatter import (
     build_section_block,
     build_market_card,
 )
-from datetime import datetime
+from datetime import datetime  # noqa: E402
 
 
 def test_escape_html():
@@ -22,7 +31,8 @@ def test_highlight_ticker():
 
 def test_get_trend_arrow():
     assert get_trend_arrow(1.5) == "📈"
-    assert get_trend_arrow(0.0) == "📈"
+    # 0% 變動視為持平→偏空（避免把無變動誤標為上漲）
+    assert get_trend_arrow(0.0) == "📉"
     assert get_trend_arrow(-1.2) == "📉"
 
 def test_build_header():

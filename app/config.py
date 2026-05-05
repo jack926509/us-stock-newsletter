@@ -3,6 +3,8 @@
 
 使用 Pydantic Settings 在啟動時驗證所有必要的環境變數，
 缺少任何必要的 API Key 將立即報錯而非在運行時產生隱晦錯誤。
+
+LLM 統一走 OpenRouter（OpenAI 相容端點），方便切換低成本模型。
 """
 
 import logging
@@ -19,16 +21,45 @@ logging.basicConfig(
 log = logging.getLogger("newsletter")
 
 
+# ─── OpenRouter 端點 ──────────────────────────────────────────
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
 # ─── Settings（啟動時驗證） ───────────────────────────────────
 class Settings(BaseSettings):
     """所有必要環境變數，啟動時自動驗證。"""
 
     # API Keys（必填）
-    anthropic_api_key: str = Field(..., description="Anthropic API Key")
+    openrouter_api_key: str = Field(..., description="OpenRouter API Key（統一 LLM 入口）")
     finnhub_api_key: str = Field(..., description="Finnhub API Key")
     tavily_api_key: str = Field(..., description="Tavily API Key")
     telegram_token: str = Field(..., description="Telegram Bot Token")
     telegram_chat_id: str = Field(..., description="Telegram Chat/Channel ID")
+
+    # OpenRouter 路由元資料（選填，回報給 OpenRouter 用於 leaderboard / 限流追蹤）
+    openrouter_referer: str = Field(
+        default="https://github.com/jack926509/us-stock-newsletter",
+        description="OpenRouter HTTP-Referer header",
+    )
+    openrouter_app_title: str = Field(
+        default="US Stock Newsletter",
+        description="OpenRouter X-Title header",
+    )
+
+    # ─── 各階段使用的模型（皆為 OpenRouter 模型 ID） ───────────
+    # 預設選用便宜的 Gemini Flash Lite / Flash 系列；可由 env 覆寫
+    planner_model: str = Field(
+        default="google/gemini-2.5-flash-lite",
+        description="Planner 階段使用的模型",
+    )
+    writer_model: str = Field(
+        default="google/gemini-2.5-flash-lite",
+        description="Writer 階段使用的模型",
+    )
+    editor_model: str = Field(
+        default="google/gemini-2.5-flash",
+        description="Editor 階段使用的模型（需要穩定的 tool calling）",
+    )
 
     # 排程設定（有預設值）
     cron_hour: int = Field(default=8, description="Cron 觸發小時")
@@ -56,8 +87,8 @@ class Settings(BaseSettings):
         description="ai-hedge-fund 要啟用的分析師列表（env 用逗號分隔）",
     )
     hedge_fund_model: str = Field(
-        default="claude-haiku-4-6",
-        description="ai-hedge-fund 使用的 Claude 模型",
+        default="google/gemini-2.5-flash-lite",
+        description="ai-hedge-fund 內部使用的模型（透過 OpenRouter 呼叫）",
     )
     hedge_fund_timeout: int = Field(
         default=240,
@@ -108,3 +139,7 @@ TRIGGER_COOLDOWN_SECONDS = 300
 DEFAULT_WATCHLIST: tuple[str, ...] = ("AAPL", "MSFT", "NVDA", "GOOGL", "TSLA")
 # watchlist 硬上限，避免 LLM 呼叫成本失控
 MAX_WATCHLIST_SIZE = 10
+
+# Ticker 規格（單一來源，formatter / watchlist 共用）
+# 接受 1 字母開頭 + 0-9 字母/數字/. / -（如 BRK.B, BRK-B）
+TICKER_PATTERN = r"[A-Z][A-Z0-9.\-]{0,9}"

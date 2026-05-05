@@ -13,9 +13,9 @@ import json
 import re
 from pathlib import Path
 
-from app.config import DEFAULT_WATCHLIST, MAX_WATCHLIST_SIZE, log, settings
+from app.config import DEFAULT_WATCHLIST, MAX_WATCHLIST_SIZE, TICKER_PATTERN, log, settings
 
-_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+_TICKER_RE = re.compile(rf"^{TICKER_PATTERN}$")
 
 
 def load_watchlist() -> list[str]:

@@ -3,7 +3,7 @@
 import os
 
 # 確保 config 可以 import
-os.environ.setdefault("ANTHROPIC_API_KEY", "test")
+os.environ.setdefault("OPENROUTER_API_KEY", "test")
 os.environ.setdefault("FINNHUB_API_KEY", "test")
 os.environ.setdefault("TAVILY_API_KEY", "test")
 os.environ.setdefault("TELEGRAM_TOKEN", "test")

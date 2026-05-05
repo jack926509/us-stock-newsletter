@@ -7,8 +7,10 @@ HTML 格式化工具
 import re
 from datetime import datetime
 
-# Regex 用於捕獲 【TICKER】格式
-_TICKER_RE = re.compile(r'【([A-Z]{1,5})】')
+from app.config import TICKER_PATTERN
+
+# Regex 用於捕獲 【TICKER】格式（與 watchlist 共用同一 pattern，支援 BRK.B / BRK-B）
+_TICKER_RE = re.compile(rf"【({TICKER_PATTERN})】")
 
 
 def escape_html(text: str) -> str:
@@ -27,7 +29,7 @@ def highlight_ticker(body: str) -> str:
 
 def get_trend_arrow(change: float) -> str:
     """根據漲跌加上表情符號。"""
-    return "📈" if change >= 0 else "📉"
+    return "📈" if change > 0 else "📉"
 
 
 def build_header(subject: str, now: datetime) -> str:
