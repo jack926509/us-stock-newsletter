@@ -1,7 +1,7 @@
 """
 單例客戶端初始化
 
-集中管理 httpx / OpenAI (OpenRouter) / Telegram 客戶端的生命週期。
+集中管理 httpx / OpenAI / Telegram 客戶端的生命週期。
 httpx.AsyncClient 與 telegram.Bot 都在 FastAPI lifespan 中初始化和關閉。
 """
 
@@ -9,18 +9,13 @@ import httpx
 import telegram
 from openai import AsyncOpenAI
 
-from app.config import OPENROUTER_BASE_URL, settings
+from app.config import settings
 
 # ─── Singleton Clients ────────────────────────────────────────
-# OpenAI SDK 走 OpenRouter，回傳格式 / tool calling 完全相容。
+# OpenAI 官方端點（base_url 採 SDK 預設）。
 llm_client = AsyncOpenAI(
-    base_url=OPENROUTER_BASE_URL,
-    api_key=settings.openrouter_api_key,
+    api_key=settings.openai_api_key,
     timeout=90.0,  # 涵蓋 Editor 最長呼叫時間
-    default_headers={
-        "HTTP-Referer": settings.openrouter_referer,
-        "X-Title": settings.openrouter_app_title,
-    },
 )
 
 # httpx / telegram 需要在 async context 中初始化，由 lifespan 管理

@@ -4,7 +4,7 @@
 使用 Pydantic Settings 在啟動時驗證所有必要的環境變數，
 缺少任何必要的 API Key 將立即報錯而非在運行時產生隱晦錯誤。
 
-LLM 統一走 OpenRouter（OpenAI 相容端點），方便切換低成本模型。
+LLM 統一走 OpenAI 官方 API；預設模型為 gpt-4o-mini（便宜且支援 tool calling）。
 """
 
 import logging
@@ -21,43 +21,30 @@ logging.basicConfig(
 log = logging.getLogger("newsletter")
 
 
-# ─── OpenRouter 端點 ──────────────────────────────────────────
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-
-
 # ─── Settings（啟動時驗證） ───────────────────────────────────
 class Settings(BaseSettings):
     """所有必要環境變數，啟動時自動驗證。"""
 
     # API Keys（必填）
-    openrouter_api_key: str = Field(..., description="OpenRouter API Key（統一 LLM 入口）")
+    openai_api_key: str = Field(..., description="OpenAI API Key（統一 LLM 入口）")
     finnhub_api_key: str = Field(..., description="Finnhub API Key")
     tavily_api_key: str = Field(..., description="Tavily API Key")
     telegram_token: str = Field(..., description="Telegram Bot Token")
     telegram_chat_id: str = Field(..., description="Telegram Chat/Channel ID")
 
-    # OpenRouter 路由元資料（選填，回報給 OpenRouter 用於 leaderboard / 限流追蹤）
-    openrouter_referer: str = Field(
-        default="https://github.com/jack926509/us-stock-newsletter",
-        description="OpenRouter HTTP-Referer header",
-    )
-    openrouter_app_title: str = Field(
-        default="US Stock Newsletter",
-        description="OpenRouter X-Title header",
-    )
-
-    # ─── 各階段使用的模型（皆為 OpenRouter 模型 ID） ───────────
-    # 預設選用便宜的 Gemini Flash Lite / Flash 系列；可由 env 覆寫
+    # ─── 各階段使用的模型（OpenAI 模型 ID） ────────────────────
+    # 預設選用 gpt-4o-mini（便宜 + tool calling 穩定）；可由 env 覆寫
+    # 若想再省可改為 gpt-4.1-nano；想要更高品質可改為 gpt-4.1-mini / gpt-4o
     planner_model: str = Field(
-        default="google/gemini-2.5-flash-lite",
+        default="gpt-4o-mini",
         description="Planner 階段使用的模型",
     )
     writer_model: str = Field(
-        default="google/gemini-2.5-flash-lite",
+        default="gpt-4o-mini",
         description="Writer 階段使用的模型",
     )
     editor_model: str = Field(
-        default="google/gemini-2.5-flash",
+        default="gpt-4o-mini",
         description="Editor 階段使用的模型（需要穩定的 tool calling）",
     )
 
@@ -87,8 +74,8 @@ class Settings(BaseSettings):
         description="ai-hedge-fund 要啟用的分析師列表（env 用逗號分隔）",
     )
     hedge_fund_model: str = Field(
-        default="google/gemini-2.5-flash-lite",
-        description="ai-hedge-fund 內部使用的模型（透過 OpenRouter 呼叫）",
+        default="gpt-4o-mini",
+        description="ai-hedge-fund 內部使用的 OpenAI 模型",
     )
     hedge_fund_timeout: int = Field(
         default=240,

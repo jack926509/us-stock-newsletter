@@ -6,7 +6,7 @@ import os
 import pytest
 
 # 為了能在無 .env 的情況下 import config，預先塞入必要的 env var
-os.environ.setdefault("OPENROUTER_API_KEY", "test")
+os.environ.setdefault("OPENAI_API_KEY", "test")
 os.environ.setdefault("FINNHUB_API_KEY", "test")
 os.environ.setdefault("TAVILY_API_KEY", "test")
 os.environ.setdefault("TELEGRAM_TOKEN", "test")

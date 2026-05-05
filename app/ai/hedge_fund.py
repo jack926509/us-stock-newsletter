@@ -18,7 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.config import OPENROUTER_BASE_URL, log, settings
+from app.config import log, settings
 from app.models import AnalystSignal, TickerVerdict
 
 # ─── 首次 import 時把 ai-hedge-fund 放進 sys.path ──────────────
@@ -131,12 +131,10 @@ async def run_hedge_fund_analysis(tickers: list[str]) -> list[TickerVerdict]:
         log.error("ai-hedge-fund submodule 未就緒或無法 import：%s — 本次跳過個股分析", e)
         return []
 
-    # vendor 的 get_model() 對 OpenAI provider 會透過 langchain-openai 讀取
-    # OPENAI_API_KEY / OPENAI_API_BASE 環境變數。把 OpenRouter 設定強制寫回，
-    # 讓 ai-hedge-fund 內部 LLM 呼叫也走 OpenRouter（統一 LLM 入口、節省成本）。
-    os.environ["OPENAI_API_KEY"] = settings.openrouter_api_key
-    os.environ["OPENAI_API_BASE"] = OPENROUTER_BASE_URL
-    os.environ["OPENAI_BASE_URL"] = OPENROUTER_BASE_URL
+    # vendor 的 get_model() 對 OpenAI provider 透過 langchain-openai 讀取
+    # OPENAI_API_KEY 環境變數；把已驗證過的 settings.openai_api_key 強制寫回，
+    # 確保 vendor 內部 LLM 呼叫拿得到 key（即使 Zeabur 把 env 名稱大小寫弄亂）。
+    os.environ["OPENAI_API_KEY"] = settings.openai_api_key
     if settings.financial_datasets_api_key and not os.environ.get("FINANCIAL_DATASETS_API_KEY"):
         os.environ["FINANCIAL_DATASETS_API_KEY"] = settings.financial_datasets_api_key
 
