@@ -75,7 +75,7 @@ _STUB_PROVIDERS = {
     "langchain_google_genai": ["ChatGoogleGenerativeAI"],
     "langchain_groq": ["ChatGroq"],
     "langchain_xai": ["ChatXAI"],
-    "langchain_openai": ["ChatOpenAI", "AzureChatOpenAI"],
+    "langchain_anthropic": ["ChatAnthropic"],
     "langchain_gigachat": ["GigaChat"],
     "langchain_ollama": ["ChatOllama"],
 }
@@ -131,13 +131,10 @@ async def run_hedge_fund_analysis(tickers: list[str]) -> list[TickerVerdict]:
         log.error("ai-hedge-fund submodule 未就緒或無法 import：%s — 本次跳過個股分析", e)
         return []
 
-    # vendor 的 get_model() 直接 os.getenv("ANTHROPIC_API_KEY")（strict uppercase），
-    # 即使 Zeabur 把 key 設成小寫 env、或 pydantic-settings 讀完後 os.environ 名稱對不上，
-    # 都會噴 "Anthropic API key not found"。
-    # 這裡把已驗證過的 settings.anthropic_api_key 強制寫回 os.environ，確保 vendor 拿得到。
-    if settings.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
-        os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
-        log.info("已補注 ANTHROPIC_API_KEY 至 os.environ 供 ai-hedge-fund 使用")
+    # vendor 的 get_model() 對 OpenAI provider 透過 langchain-openai 讀取
+    # OPENAI_API_KEY 環境變數；把已驗證過的 settings.openai_api_key 強制寫回，
+    # 確保 vendor 內部 LLM 呼叫拿得到 key（即使 Zeabur 把 env 名稱大小寫弄亂）。
+    os.environ["OPENAI_API_KEY"] = settings.openai_api_key
     if settings.financial_datasets_api_key and not os.environ.get("FINANCIAL_DATASETS_API_KEY"):
         os.environ["FINANCIAL_DATASETS_API_KEY"] = settings.financial_datasets_api_key
 
@@ -176,7 +173,7 @@ async def run_hedge_fund_analysis(tickers: list[str]) -> list[TickerVerdict]:
             show_reasoning=False,
             selected_analysts=selected_analysts,
             model_name=settings.hedge_fund_model,
-            model_provider="Anthropic",
+            model_provider="OpenAI",
         )
 
     log.info(
