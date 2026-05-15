@@ -3,7 +3,7 @@ Slack 傳送模組
 
 策略：
 1. 主訊息（broadcast）：header + market snapshot → 出現在頻道列表
-2. Thread 回覆：每個焦點章節、AI 個股共識、footer 各自一則 → 不再轟炸頻道
+2. Thread 回覆：所有焦點段落串成一篇文章；AI 個股共識與 footer 各自一則
 
 如此每天只會在頻道顯示一則「日報主貼文」，細節都收在 thread 內，符合 Slack 慣例。
 """
@@ -125,13 +125,12 @@ async def send_newsletter_to_slack(newsletter: Newsletter, market_data: dict) ->
         raise RuntimeError("Slack 主訊息送出後沒有拿到 ts，無法繼續 thread。")
 
     # Thread：所有焦點段落串成一篇，僅以 divider 分隔（不再每章一則訊息）
-    total = len(newsletter.sections)
     article_blocks: list[dict] = []
     for i, section in enumerate(newsletter.sections):
         if i > 0:
             article_blocks.append({"type": "divider"})
         article_blocks.extend(
-            build_section_blocks(i, total, section.title, section.body, section.sources)
+            build_section_blocks(section.title, section.body, section.sources)
         )
     if article_blocks:
         await _post_in_thread(

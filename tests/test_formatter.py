@@ -9,6 +9,7 @@ os.environ.setdefault("SLACK_CHANNEL", "C_TEST")
 from datetime import datetime  # noqa: E402
 
 from app.formatter import (  # noqa: E402
+    _split_for_section,
     build_header_blocks,
     build_market_blocks,
     build_section_blocks,
@@ -16,6 +17,7 @@ from app.formatter import (  # noqa: E402
     get_trend_arrow,
     highlight_ticker,
 )
+from app.config import SLACK_SECTION_TEXT_MAX  # noqa: E402
 
 
 def _all_text(blocks):
@@ -66,7 +68,7 @@ def test_build_section_blocks_continuous_article_style():
         SimpleNamespace(title="Bloomberg News", url="https://example.com/1"),
         SimpleNamespace(title="Reuters", url="https://example.com/2"),
     ]
-    blocks = build_section_blocks(0, 3, "NVDA 財報分析", "【NVDA】大漲", sources)
+    blocks = build_section_blocks("NVDA 財報分析", "【NVDA】大漲", sources)
 
     # 不應再有 header block，也不該出現 [1/3] 之類章節編號
     assert all(b["type"] != "header" for b in blocks)
@@ -79,6 +81,24 @@ def test_build_section_blocks_continuous_article_style():
     assert "*NVDA*" in text  # ticker 被轉粗體
     assert "<https://example.com/1|[1] Bloomberg News>" in text
     assert "<https://example.com/2|[2] Reuters>" in text
+
+
+def test_split_for_section_hard_cut_when_no_boundary():
+    """無邊界字元（純單字元）時應硬切，不能無窮迴圈。"""
+    text = "x" * (SLACK_SECTION_TEXT_MAX + 100)
+    chunks = _split_for_section(text)
+    assert len(chunks) >= 2
+    assert all(len(c) <= SLACK_SECTION_TEXT_MAX for c in chunks)
+    assert sum(len(c) for c in chunks) == len(text)
+
+
+def test_split_for_section_boundary_at_start_does_not_loop():
+    """開頭就是 `\\n\\n` 的病態輸入：rfind 會回 0，需走硬切而非空 chunk。"""
+    text = "\n\n" + ("x" * (SLACK_SECTION_TEXT_MAX + 50))
+    chunks = _split_for_section(text)
+    # 主要斷言：函式有正常結束、有切出非空 chunk
+    assert len(chunks) >= 2
+    assert all(c for c in chunks)
 
 
 def test_build_market_blocks():
