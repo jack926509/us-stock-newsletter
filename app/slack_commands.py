@@ -304,22 +304,22 @@ def cmd_resume(args: list[str]) -> dict[str, Any]:
     return ephemeral("▶️ 排程已恢復。")
 
 
-def cmd_watchlist(args: list[str]) -> dict[str, Any]:
+async def cmd_watchlist(args: list[str]) -> dict[str, Any]:
     sub = args[0].lower() if args else "list"
     rest = args[1:]
 
     if sub in ("list", ""):
-        return _watchlist_list()
+        return await _watchlist_list()
     if sub == "add":
         if not rest:
             return ephemeral("用法：`/newsletter watchlist add <TICKER...>`")
-        return _watchlist_add(rest)
+        return await _watchlist_add(rest)
     if sub == "remove":
         if not rest:
             return ephemeral("用法：`/newsletter watchlist remove <TICKER...>`")
-        return _watchlist_remove(rest)
+        return await _watchlist_remove(rest)
     if sub == "clear":
-        current = read_raw_watchlist()
+        current = await read_raw_watchlist()
         if not current:
             return ephemeral("ℹ️ watchlist 已經是空的。")
         return confirm_clear_watchlist(len(current))
@@ -329,15 +329,15 @@ def cmd_watchlist(args: list[str]) -> dict[str, Any]:
     )
 
 
-def _watchlist_list() -> dict[str, Any]:
-    tickers = read_raw_watchlist()
+async def _watchlist_list() -> dict[str, Any]:
+    tickers = await read_raw_watchlist()
     if not tickers:
         return ephemeral("watchlist 是空的（pipeline 會 fallback 到預設清單）。")
     return ephemeral(f"*自選股（{len(tickers)} 檔）*\n{_fmt_tickers(tickers)}")
 
 
-def _watchlist_add(raw: list[str]) -> dict[str, Any]:
-    r = add_tickers(raw)
+async def _watchlist_add(raw: list[str]) -> dict[str, Any]:
+    r = await add_tickers(raw)
     parts = []
     if r.added:
         parts.append(f"✅ 已加入：{_fmt_tickers(r.added)}")
@@ -353,8 +353,8 @@ def _watchlist_add(raw: list[str]) -> dict[str, Any]:
     return ephemeral("\n".join(parts))
 
 
-def _watchlist_remove(raw: list[str]) -> dict[str, Any]:
-    r = remove_tickers(raw)
+async def _watchlist_remove(raw: list[str]) -> dict[str, Any]:
+    r = await remove_tickers(raw)
     parts = []
     if r.removed:
         parts.append(f"✅ 已移除：{_fmt_tickers(r.removed)}")
@@ -406,6 +406,6 @@ async def dispatch(
     if name == "resume":
         return cmd_resume(args)
     if name == "watchlist":
-        return cmd_watchlist(args)
+        return await cmd_watchlist(args)
 
     return ephemeral(f"未知指令 `{name}`。\n\n" + _help_overview()["text"])

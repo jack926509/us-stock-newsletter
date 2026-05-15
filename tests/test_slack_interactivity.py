@@ -1,5 +1,6 @@
 """按鈕互動 dispatcher 測試"""
 
+import asyncio
 import json
 import os
 
@@ -35,8 +36,14 @@ def test_parse_payload_invalid():
     assert si.parse_payload("") == {}
 
 
+def _async_returning(value):
+    async def _fn(*args, **kwargs):
+        return value
+    return _fn
+
+
 def test_dispatch_cancel():
-    r = si.dispatch(_payload(ACTION_WL_CLEAR_CANCEL))
+    r = asyncio.run(si.dispatch(_payload(ACTION_WL_CLEAR_CANCEL)))
     assert "已取消" in r["text"]
     assert r["replace_original"] is True
 
@@ -44,34 +51,38 @@ def test_dispatch_cancel():
 def test_dispatch_confirm_clears(monkeypatch):
     from app.data.watchlist import MutationResult
 
-    monkeypatch.setattr(si, "read_raw_watchlist", lambda: ["AAPL", "NVDA", "TSLA"])
+    monkeypatch.setattr(si, "read_raw_watchlist", _async_returning(["AAPL", "NVDA", "TSLA"]))
     captured = {}
 
-    def fake_clear():
+    async def fake_clear():
         captured["called"] = True
         return MutationResult(removed=["AAPL", "NVDA", "TSLA"], final_count=0)
 
     monkeypatch.setattr(si, "clear_watchlist", fake_clear)
-    r = si.dispatch(_payload(ACTION_WL_CLEAR_CONFIRM))
+    r = asyncio.run(si.dispatch(_payload(ACTION_WL_CLEAR_CONFIRM)))
     assert captured.get("called") is True
     assert "3 檔" in r["text"]
     assert r["replace_original"] is True
 
 
 def test_dispatch_confirm_when_already_empty(monkeypatch):
-    monkeypatch.setattr(si, "read_raw_watchlist", lambda: [])
+    monkeypatch.setattr(si, "read_raw_watchlist", _async_returning([]))
     called = []
-    monkeypatch.setattr(si, "clear_watchlist", lambda: called.append(1))
-    r = si.dispatch(_payload(ACTION_WL_CLEAR_CONFIRM))
+
+    async def fake_clear():
+        called.append(1)
+
+    monkeypatch.setattr(si, "clear_watchlist", fake_clear)
+    r = asyncio.run(si.dispatch(_payload(ACTION_WL_CLEAR_CONFIRM)))
     assert called == []
     assert "已經是空的" in r["text"]
 
 
 def test_dispatch_unknown_action():
-    r = si.dispatch(_payload("mystery_action"))
+    r = asyncio.run(si.dispatch(_payload("mystery_action")))
     assert "mystery_action" in r["text"]
 
 
 def test_dispatch_empty_actions():
-    r = si.dispatch({"actions": []})
+    r = asyncio.run(si.dispatch({"actions": []}))
     assert "空的" in r["text"]

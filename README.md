@@ -208,15 +208,35 @@ us-stock-newsletter/
 - 清單為空或檔案壞掉會自動 fallback 到 `DEFAULT_WATCHLIST = [AAPL, MSFT, NVDA, GOOGL, TSLA]` 並記 log
 - 預設清單完全落在 Financial Datasets **免費層**，不需付費 key；若加入 META / AMZN / AMD / TSM 等，請於 Zeabur 新增 `FINANCIAL_DATASETS_API_KEY`
 
-### Zeabur Volume 設定（讓 Slack 編輯持久化）
+### Zeabur PostgreSQL 設定（讓 Slack 編輯持久化）
 
-1. Zeabur Service → **Volumes** tab → **Add Volume**
-   - **Mount path**：`/data`
-   - **Size**：1 GB（綽綽有餘）
-2. **Variables** tab 加 `WATCHLIST_PATH=/data/watchlist.json`
+watchlist 持久化採 PostgreSQL 雙模式：
+- `DATABASE_URL` 有設 → 走 DB（Zeabur 部署的標準路徑）
+- 未設 → fallback 到 `WATCHLIST_PATH` 檔案模式（本地開發、不需 PG 的場景）
+
+#### 部署步驟
+
+1. Zeabur Project → **Add Service** → **Marketplace** → 選 **PostgreSQL**，等服務啟動
+2. 回到 us-stock-newsletter Service → **Variables** tab → 新增
+   - **Key**：`DATABASE_URL`
+   - **Value**：`${POSTGRES.POSTGRES_CONNECTION_STRING}`（或對應 Postgres Service 的 template 變數名稱；展開後會是 `postgresql://user:pass@host:5432/dbname`）
 3. **Restart Service**
-4. 首次啟動時，若 `/data/watchlist.json` 不存在，`load_watchlist` 會自動從 repo 根的 `watchlist.json` 當「種子」讀；之後 Slack 任何編輯都寫進 Volume，不會被部署覆蓋
-5. 想完全 reset 可以 SSH 進 Zeabur container 刪掉 `/data/watchlist.json`，下次讀取又會回到 repo 種子
+4. Logs 應看到 `✅ PostgreSQL 連線池就緒；watchlist 表已 ensure`
+5. 首次啟動時若 `watchlist` table 為空，會自動以 `WATCHLIST_PATH` 檔（沒有就用 repo 根 `watchlist.json`）為 seed 寫入 DB。之後 Slack 任何 add/remove/clear 都寫進 DB，跨重啟與重部署都保留。
+
+#### 從 Volume 切換到 Postgres
+
+若你之前已經設定過 Volume + `WATCHLIST_PATH=/data/watchlist.json`：
+
+1. 先設好 `DATABASE_URL`（沿用上面步驟）
+2. **保留** `WATCHLIST_PATH=/data/watchlist.json`（重啟時會被當作 seed 讀進 DB）
+3. Restart Service → 確認 logs 出現 `🌱 PostgreSQL watchlist 從檔案種子初始化（N 檔）`
+4. 確認後可以拔掉 Volume（已備份到 DB）；`WATCHLIST_PATH` 變數可保留或移除都無妨
+
+#### 排查
+
+- 用 `/newsletter ping` 看 PostgreSQL latency；連不上會列出錯誤訊息
+- 表結構：`watchlist(ticker TEXT PRIMARY KEY, added_at TIMESTAMPTZ DEFAULT NOW())`，可用 `psql` 直接查 `SELECT * FROM watchlist ORDER BY added_at;`
 
 ---
 
@@ -286,7 +306,8 @@ us-stock-newsletter/
 | `SLACK_BOT_TOKEN` | ✅ | — | Slack Bot Token（`xoxb-...`） | Slack App → OAuth & Permissions |
 | `SLACK_CHANNEL` | ✅ | — | 頻道 ID（建議）或 `#channel-name` | 頻道 → Get channel details → 底部 |
 | `SLACK_SIGNING_SECRET` | | `""` | Slack signing secret；要用 slash command 才需要 | Slack App → Basic Information → App Credentials |
-| `WATCHLIST_PATH` | | `watchlist.json` | watchlist 檔案路徑；掛 Volume 時設 `/data/watchlist.json` 讓 Slack 編輯持久化 | — |
+| `DATABASE_URL` | | `""` | PostgreSQL DSN；設定後 watchlist 改存 DB（推薦部署用），未設則 fallback 到檔案模式 | Zeabur Postgres Service 提供 `${...POSTGRES_CONNECTION_STRING}` 模板變數 |
+| `WATCHLIST_PATH` | | `watchlist.json` | watchlist 檔案路徑（檔案模式用 / DB 模式只當 seed 來源）| — |
 | `CRON_HOUR` | | `8` | 排程觸發小時 | — |
 | `CRON_MINUTE` | | `0` | 排程觸發分鐘 | — |
 | `TIMEZONE` | | `Asia/Taipei` | 時區 | — |

@@ -43,7 +43,7 @@ async def run_newsletter_pipeline() -> None:
         log.info("AI 規劃主旨: %s (焦點: %s)", plan.title, plan.topics)
 
         # 2.5 讀取自選股並**與 Tavily 並行**啟動 ai-hedge-fund 分析
-        watchlist = load_watchlist()
+        watchlist = await load_watchlist()
         pipeline_state.ticker_count = len(watchlist)
 
         # 3. 對每個主題進行 Tavily 深度搜索（與 hedge fund 並行）

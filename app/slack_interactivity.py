@@ -30,7 +30,7 @@ def parse_payload(form_payload: str) -> dict[str, Any]:
         return {}
 
 
-def dispatch(payload: dict[str, Any]) -> dict[str, Any]:
+async def dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     """根據 payload 執行對應動作。"""
     actions = payload.get("actions") or []
     if not actions:
@@ -44,10 +44,10 @@ def dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         return replaced_message("✅ 已取消，watchlist 沒有改動。")
 
     if action_id == ACTION_WL_CLEAR_CONFIRM:
-        before = read_raw_watchlist()
+        before = await read_raw_watchlist()
         if not before:
             return replaced_message("ℹ️ watchlist 已經是空的，未做任何改動。")
-        result = clear_watchlist()
+        result = await clear_watchlist()
         return replaced_message(
             f"🗑 watchlist 已清空（移除 {len(result.removed)} 檔）。"
             f"pipeline 會 fallback 到預設清單，直到再次 add。"
