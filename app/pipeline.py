@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import time
 
 from app.config import log, settings
 from app.clients import get_slack_client
@@ -18,11 +19,16 @@ from app.ai.writer import write_section
 from app.ai.editor import edit_newsletter
 from app.ai.hedge_fund import run_hedge_fund_analysis
 from app.sender import send_newsletter_to_slack
+from app.state import pipeline_state
 
 
 async def run_newsletter_pipeline() -> None:
     """執行美股日報自動化完整流程"""
     log.info("🚀 開始生成美股日報流程...")
+    pipeline_state.started_at = time.time()
+    pipeline_state.finished_at = 0.0
+    pipeline_state.error = None
+    pipeline_state.success = None
 
     try:
         # 1. 取得市場大盤與突發新聞
@@ -38,6 +44,7 @@ async def run_newsletter_pipeline() -> None:
 
         # 2.5 讀取自選股並**與 Tavily 並行**啟動 ai-hedge-fund 分析
         watchlist = load_watchlist()
+        pipeline_state.ticker_count = len(watchlist)
 
         # 3. 對每個主題進行 Tavily 深度搜索（與 hedge fund 並行）
         log.info(
@@ -104,8 +111,11 @@ async def run_newsletter_pipeline() -> None:
         log.info("排版完成，開始推送 Slack 頻道...")
         await send_newsletter_to_slack(newsletter, market_data)
         log.info("✅ 流程結束，美股日報發送成功")
+        pipeline_state.success = True
 
     except Exception as e:
+        pipeline_state.success = False
+        pipeline_state.error = str(e)[:500]
         log.exception("❌ 美股日報生成流程發生未預期嚴重失敗: %s", e)
         try:
             await get_slack_client().chat_postMessage(
@@ -136,3 +146,5 @@ async def run_newsletter_pipeline() -> None:
             )
         except Exception as notify_e:
             log.error("Slack 錯誤通知發送失敗，無法推播告警: %s", notify_e)
+    finally:
+        pipeline_state.finished_at = time.time()

@@ -182,9 +182,23 @@ us-stock-newsletter/
 
 ### 如何更新
 
+#### 方式一：Slack（即時，需 Volume 持久化）
+
+```
+/newsletter watchlist add AAPL NVDA
+/newsletter watchlist remove TSLA
+/newsletter watchlist clear     # 互動按鈕二次確認
+```
+
+**前提**：要設好 `WATCHLIST_PATH=/data/watchlist.json` 並掛 Zeabur Volume，否則改動會在重新部署時被 git repo 覆蓋。設定方式見下方。
+
+#### 方式二：GitHub commit（永久進版控）
+
 1. 於 GitHub 網頁直接打開 `watchlist.json` → 點鉛筆圖示編輯 → commit 到 `main`
 2. Zeabur 會自動偵測 push 並重新部署
-3. 下一次排程（或手動 `/run`）就會以新清單跑 AI 多分析師
+3. 下一次排程（或手動 `/newsletter run`）就會以新清單跑 AI 多分析師
+
+> 推薦工作流：用 Slack 試水溫，覺得某檔值得長期觀察就 commit 進 repo。
 
 ### 規則
 
@@ -193,6 +207,16 @@ us-stock-newsletter/
 - **硬上限 10 檔**（防止 LLM 成本爆炸）
 - 清單為空或檔案壞掉會自動 fallback 到 `DEFAULT_WATCHLIST = [AAPL, MSFT, NVDA, GOOGL, TSLA]` 並記 log
 - 預設清單完全落在 Financial Datasets **免費層**，不需付費 key；若加入 META / AMZN / AMD / TSM 等，請於 Zeabur 新增 `FINANCIAL_DATASETS_API_KEY`
+
+### Zeabur Volume 設定（讓 Slack 編輯持久化）
+
+1. Zeabur Service → **Volumes** tab → **Add Volume**
+   - **Mount path**：`/data`
+   - **Size**：1 GB（綽綽有餘）
+2. **Variables** tab 加 `WATCHLIST_PATH=/data/watchlist.json`
+3. **Restart Service**
+4. 首次啟動時，若 `/data/watchlist.json` 不存在，`load_watchlist` 會自動從 repo 根的 `watchlist.json` 當「種子」讀；之後 Slack 任何編輯都寫進 Volume，不會被部署覆蓋
+5. 想完全 reset 可以 SSH 進 Zeabur container 刪掉 `/data/watchlist.json`，下次讀取又會回到 repo 種子
 
 ---
 
@@ -262,6 +286,7 @@ us-stock-newsletter/
 | `SLACK_BOT_TOKEN` | ✅ | — | Slack Bot Token（`xoxb-...`） | Slack App → OAuth & Permissions |
 | `SLACK_CHANNEL` | ✅ | — | 頻道 ID（建議）或 `#channel-name` | 頻道 → Get channel details → 底部 |
 | `SLACK_SIGNING_SECRET` | | `""` | Slack signing secret；要用 slash command 才需要 | Slack App → Basic Information → App Credentials |
+| `WATCHLIST_PATH` | | `watchlist.json` | watchlist 檔案路徑；掛 Volume 時設 `/data/watchlist.json` 讓 Slack 編輯持久化 | — |
 | `CRON_HOUR` | | `8` | 排程觸發小時 | — |
 | `CRON_MINUTE` | | `0` | 排程觸發分鐘 | — |
 | `TIMEZONE` | | `Asia/Taipei` | 時區 | — |
@@ -308,24 +333,48 @@ curl -X POST https://your-service.zeabur.app/run
 ### `POST /slack/command` — Slack Slash Command 入口
 
 ```
-/newsletter help        # 顯示指令說明
-/newsletter status      # 下次排程、上次觸發、背景任務狀態
-/newsletter watchlist   # 顯示自選股清單
-/newsletter run         # 立即觸發日報（共用 300 秒 cooldown）
+/newsletter help [<command>]              # 總覽，或單一指令詳細說明
+/newsletter status                        # 下次排程 / 上次結果 / 暫停狀態 / cooldown
+/newsletter ping                          # 並行健檢 OpenAI / Finnhub / Tavily / Slack
+/newsletter run                           # 觸發日報（共用 300s cooldown）
+
+/newsletter pause                         # 暫停排程（無限期）
+/newsletter pause 30m                     # 暫停 30 分鐘後自動恢復
+/newsletter pause 2h                      # 暫停 2 小時
+/newsletter resume                        # 立即恢復
+
+/newsletter watchlist                     # 列出自選股
+/newsletter watchlist add AAPL NVDA       # 加（多檔以空格分隔）
+/newsletter watchlist remove TSLA         # 移除
+/newsletter watchlist clear               # 互動按鈕二次確認後清空
 ```
 
-所有回應都是 **ephemeral**（只有發起人看到）；`run` 的結果一樣推到 `SLACK_CHANNEL`。  
-此端點驗證 `X-Slack-Signature` HMAC-SHA256 + 5 分鐘 timestamp 防 replay，並限定請求來源為 `SLACK_CHANNEL`。未設定 `SLACK_SIGNING_SECRET` 時整個 endpoint 回 503。
+所有回應都是 **ephemeral**（只有發起人看到）；`run` 的結果一樣推到 `SLACK_CHANNEL`。
 
-**Slack 端設定（每個 sub-command 都共用同一個 `/newsletter`）**：
-1. https://api.slack.com/apps → 你的 App → **Slash Commands** → **Create New Command**
-2. Command: `/newsletter`
-3. Request URL: `https://your-service.zeabur.app/slack/command`
-4. Short Description: `美股日報控制台`
-5. Usage Hint: `run | status | watchlist | help`
-6. **Save**
-7. 回 **Basic Information** → **App Credentials** → 複製 **Signing Secret**，貼到 Zeabur Variables 的 `SLACK_SIGNING_SECRET`
-8. 若 OAuth scope 改動過要 **Reinstall to Workspace**
+**安全層**（必須全部過才會被處理）：
+1. `X-Slack-Signature` HMAC-SHA256 驗證
+2. `X-Slack-Request-Timestamp` 5 分鐘內（防 replay）
+3. 請求來源 channel == `SLACK_CHANNEL`
+4. `SLACK_SIGNING_SECRET` 已設定（否則 endpoint 回 503）
+
+### `POST /slack/interactivity` — Slack 互動元件入口
+
+處理 `watchlist clear` 的確認按鈕。同樣套用上面的 4 層安全驗證。
+
+### Slack App 設定步驟
+
+1. https://api.slack.com/apps → 你的 App
+2. **Slash Commands** → **Create New Command**
+   - Command: `/newsletter`
+   - Request URL: `https://your-service.zeabur.app/slack/command`
+   - Short Description: `美股日報控制台`
+   - Usage Hint: `help | status | ping | run | pause | resume | watchlist`
+   - **Save**
+3. **Interactivity & Shortcuts** → 開啟 **Interactivity** 開關
+   - Request URL: `https://your-service.zeabur.app/slack/interactivity`
+   - **Save Changes**
+4. **Basic Information** → **App Credentials** → 複製 **Signing Secret** → Zeabur Variables 設 `SLACK_SIGNING_SECRET`
+5. 若 OAuth scope 改動過要 **Install App** → **Reinstall to Workspace**
 
 ---
 

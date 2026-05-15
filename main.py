@@ -29,12 +29,11 @@ from app.pipeline import run_newsletter_pipeline
 from app.slack_commands import (
     channel_allowed,
     cmd_denied_channel,
-    cmd_help,
-    cmd_status,
-    cmd_unknown,
-    cmd_watchlist,
+    dispatch as dispatch_slash,
     verify_slack_signature,
 )
+from app.slack_interactivity import dispatch as dispatch_interactivity, parse_payload
+from app.state import cooldown_state, scheduler_handle
 
 # 支援 Windows 環境以避免 RuntimeError: Event loop is closed
 if sys.platform == "win32":
@@ -44,8 +43,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 scheduler = AsyncIOScheduler(timezone=settings.timezone)
-_last_manual_trigger = 0.0
-_background_tasks: set = set()  # 防止背景 task 被 GC 回收
 
 
 def _trigger_pipeline() -> tuple[bool, str, int]:
@@ -53,17 +50,16 @@ def _trigger_pipeline() -> tuple[bool, str, int]:
 
     回傳 (success, message, remaining_cooldown_seconds)。
     """
-    global _last_manual_trigger
     now = time.time()
-    elapsed = now - _last_manual_trigger
+    elapsed = now - cooldown_state.last_manual_trigger
     if elapsed < TRIGGER_COOLDOWN_SECONDS:
         remaining = int(TRIGGER_COOLDOWN_SECONDS - elapsed)
         return False, f"觸發太過頻繁，仍需冷卻 {remaining} 秒才能再次觸發。", remaining
 
-    _last_manual_trigger = now
+    cooldown_state.last_manual_trigger = now
     task = asyncio.create_task(run_newsletter_pipeline())
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    cooldown_state.background_tasks.add(task)
+    task.add_done_callback(cooldown_state.background_tasks.discard)
     return True, "日報流程已排入背景。請盯著頻道結果。", 0
 
 
@@ -78,7 +74,6 @@ async def lifespan(fast_app: FastAPI):
     await init_http_client()
     await init_slack_client()
 
-    # 加入每日任務（限定週一至週五）
     scheduler.add_job(
         run_newsletter_pipeline,
         CronTrigger(
@@ -87,10 +82,11 @@ async def lifespan(fast_app: FastAPI):
             minute=settings.cron_minute,
             timezone=pytz.timezone(settings.timezone),
         ),
-        id="daily_newsletter",
+        id=scheduler_handle.job_id,
         name="Daily US Stock Newsletter",
     )
     scheduler.start()
+    scheduler_handle.scheduler = scheduler
     log.info(
         "📅 定時排程已掛載：每日 %02d:%02d (%s)",
         settings.cron_hour, settings.cron_minute, settings.timezone,
@@ -98,8 +94,8 @@ async def lifespan(fast_app: FastAPI):
 
     yield
 
-    # 關閉服務
     log.info("🛑 關閉服務中...")
+    scheduler_handle.scheduler = None
     scheduler.shutdown()
     await close_slack_client()
     await close_http_client()
@@ -126,8 +122,6 @@ def health_check():
 @app.post("/run")
 async def manual_trigger_endpoint(authorization: str = Header(None)):
     """手動觸發日報流程，加入基本的鑑權防禦機制與過度戳擊保護。"""
-    # 若配置了 ADMIN_API_KEY，需要經過基本的 authorization
-    # 接受 "Bearer <token>" 或裸 token；用 hmac.compare_digest 避免 timing attack
     if settings.admin_api_key:
         provided = authorization or ""
         if provided.startswith("Bearer "):
@@ -135,7 +129,7 @@ async def manual_trigger_endpoint(authorization: str = Header(None)):
         if not hmac.compare_digest(provided, settings.admin_api_key):
             raise HTTPException(status_code=401, detail="Unauthorized API Key")
 
-    ok, msg, remaining = _trigger_pipeline()
+    ok, msg, _ = _trigger_pipeline()
     if not ok:
         raise HTTPException(status_code=429, detail=msg)
 
@@ -149,26 +143,31 @@ async def manual_trigger_endpoint(authorization: str = Header(None)):
     }
 
 
-@app.post("/slack/command")
-async def slack_command_endpoint(request: Request):
-    """Slack Slash Command 入口 `/newsletter [run|status|watchlist|help]`。"""
+def _require_signing_secret() -> str:
     if not settings.slack_signing_secret:
         raise HTTPException(
             status_code=503,
-            detail="Slash command 已停用：未設定 SLACK_SIGNING_SECRET。",
+            detail="Slack 整合已停用：未設定 SLACK_SIGNING_SECRET。",
         )
+    return settings.slack_signing_secret
 
-    body = await request.body()
-    ts = request.headers.get("X-Slack-Request-Timestamp", "")
-    sig = request.headers.get("X-Slack-Signature", "")
+
+def _verify_or_403(body: bytes, headers) -> None:
+    secret = _require_signing_secret()
+    ts = headers.get("X-Slack-Request-Timestamp", "")
+    sig = headers.get("X-Slack-Signature", "")
     if not verify_slack_signature(
-        signing_secret=settings.slack_signing_secret,
-        timestamp=ts,
-        body=body,
-        signature=sig,
+        signing_secret=secret, timestamp=ts, body=body, signature=sig
     ):
         log.warning("Slack signature 驗證失敗（ts=%s）", ts)
         raise HTTPException(status_code=403, detail="Invalid Slack signature")
+
+
+@app.post("/slack/command")
+async def slack_command_endpoint(request: Request):
+    """Slack Slash Command 入口 `/newsletter <sub-command>`。"""
+    body = await request.body()
+    _verify_or_403(body, request.headers)
 
     form = {k: v[0] for k, v in parse_qs(body.decode("utf-8")).items()}
     channel_id = form.get("channel_id", "")
@@ -183,26 +182,33 @@ async def slack_command_endpoint(request: Request):
         )
         return cmd_denied_channel()
 
-    sub = (text.split() or [""])[0].lower()
-    log.info("Slack 指令 sub=%r user=%s channel=%s", sub, user_id, channel_id)
+    log.info("Slack 指令: user=%s text=%r", user_id, text)
+    return await dispatch_slash(text, trigger=_trigger_pipeline)
 
-    if sub in ("", "help"):
-        return cmd_help()
-    if sub == "watchlist":
-        return cmd_watchlist()
-    if sub == "status":
-        return cmd_status(
-            next_run=_next_scheduled_run(),
-            last_trigger_ts=_last_manual_trigger,
-            bg_task_count=len(_background_tasks),
-            cooldown_seconds=TRIGGER_COOLDOWN_SECONDS,
-        )
-    if sub == "run":
-        ok, msg, _ = _trigger_pipeline()
-        prefix = "✅" if ok else "⏳"
-        return {"response_type": "ephemeral", "text": f"{prefix} {msg}"}
 
-    return cmd_unknown(sub)
+@app.post("/slack/interactivity")
+async def slack_interactivity_endpoint(request: Request):
+    """Slack 互動元件（按鈕、modal）入口。"""
+    body = await request.body()
+    _verify_or_403(body, request.headers)
+
+    form = {k: v[0] for k, v in parse_qs(body.decode("utf-8")).items()}
+    raw_payload = form.get("payload", "")
+    if not raw_payload:
+        raise HTTPException(status_code=400, detail="Missing payload")
+
+    payload = parse_payload(raw_payload)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Invalid payload JSON")
+
+    # interactivity 也走頻道白名單
+    channel = (payload.get("channel") or {})
+    channel_id = channel.get("id", "")
+    channel_name = channel.get("name", "")
+    if channel_id and not channel_allowed(channel_id, channel_name):
+        return cmd_denied_channel()
+
+    return dispatch_interactivity(payload)
 
 
 if __name__ == "__main__":
