@@ -69,7 +69,8 @@ def _split_for_section(text: str) -> list[str]:
         cut = remaining.rfind("\n\n", 0, SLACK_SECTION_TEXT_MAX)
         if cut == -1:
             cut = remaining.rfind("\n", 0, SLACK_SECTION_TEXT_MAX)
-        if cut == -1:
+        if cut <= 0:
+            # 找不到邊界 (-1) 或邊界在開頭 (0) 都直接硬切，避免空 chunk 造成無窮迴圈
             cut = SLACK_SECTION_TEXT_MAX
         chunks.append(remaining[:cut].rstrip())
         remaining = remaining[cut:].lstrip()
@@ -123,13 +124,8 @@ def build_market_blocks(market: dict, summary: str) -> list[dict]:
     return blocks
 
 
-def build_section_blocks(idx: int, total: int, title: str, body: str, sources: list) -> list[dict]:
-    """單個焦點段落（純文章感，不帶章節編號 / icon / header block）。
-
-    `idx` / `total` 保留參數簽名相容性，目前不用。
-    """
-    del idx, total  # 維持介面但不再使用
-
+def build_section_blocks(title: str, body: str, sources: list) -> list[dict]:
+    """單個焦點段落（純文章感，不帶章節編號 / icon / header block）。"""
     title_safe = escape_mrkdwn(title)
     body_safe = highlight_ticker(escape_mrkdwn(body))
 
