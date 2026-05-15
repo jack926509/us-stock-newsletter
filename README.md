@@ -261,6 +261,7 @@ us-stock-newsletter/
 | `TAVILY_API_KEY` | ✅ | — | Tavily API Key | [tavily.com](https://tavily.com) |
 | `SLACK_BOT_TOKEN` | ✅ | — | Slack Bot Token（`xoxb-...`） | Slack App → OAuth & Permissions |
 | `SLACK_CHANNEL` | ✅ | — | 頻道 ID（建議）或 `#channel-name` | 頻道 → Get channel details → 底部 |
+| `SLACK_SIGNING_SECRET` | | `""` | Slack signing secret；要用 slash command 才需要 | Slack App → Basic Information → App Credentials |
 | `CRON_HOUR` | | `8` | 排程觸發小時 | — |
 | `CRON_MINUTE` | | `0` | 排程觸發分鐘 | — |
 | `TIMEZONE` | | `Asia/Taipei` | 時區 | — |
@@ -303,6 +304,28 @@ curl -X POST https://your-service.zeabur.app/run
 ```
 
 > 觸發後立即回傳，日報流程在背景非同步執行。每次觸發間隔至少 **300 秒**，過於頻繁回傳 HTTP 429。
+
+### `POST /slack/command` — Slack Slash Command 入口
+
+```
+/newsletter help        # 顯示指令說明
+/newsletter status      # 下次排程、上次觸發、背景任務狀態
+/newsletter watchlist   # 顯示自選股清單
+/newsletter run         # 立即觸發日報（共用 300 秒 cooldown）
+```
+
+所有回應都是 **ephemeral**（只有發起人看到）；`run` 的結果一樣推到 `SLACK_CHANNEL`。  
+此端點驗證 `X-Slack-Signature` HMAC-SHA256 + 5 分鐘 timestamp 防 replay，並限定請求來源為 `SLACK_CHANNEL`。未設定 `SLACK_SIGNING_SECRET` 時整個 endpoint 回 503。
+
+**Slack 端設定（每個 sub-command 都共用同一個 `/newsletter`）**：
+1. https://api.slack.com/apps → 你的 App → **Slash Commands** → **Create New Command**
+2. Command: `/newsletter`
+3. Request URL: `https://your-service.zeabur.app/slack/command`
+4. Short Description: `美股日報控制台`
+5. Usage Hint: `run | status | watchlist | help`
+6. **Save**
+7. 回 **Basic Information** → **App Credentials** → 複製 **Signing Secret**，貼到 Zeabur Variables 的 `SLACK_SIGNING_SECRET`
+8. 若 OAuth scope 改動過要 **Reinstall to Workspace**
 
 ---
 

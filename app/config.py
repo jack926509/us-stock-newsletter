@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     tavily_api_key: str = Field(..., description="Tavily API Key")
     slack_bot_token: str = Field(..., description="Slack Bot Token (xoxb-...)")
     slack_channel: str = Field(..., description="Slack 頻道 ID（C...）或 #channel-name")
+    slack_signing_secret: str = Field(
+        default="",
+        description="Slack Signing Secret（用於驗證 slash command 請求；沒設就停用 slash commands）",
+    )
 
     # ─── 各階段使用的模型（OpenAI 模型 ID） ────────────────────
     # 預設選用 gpt-4o-mini（便宜 + tool calling 穩定）；可由 env 覆寫
