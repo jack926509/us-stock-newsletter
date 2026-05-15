@@ -11,6 +11,7 @@ import asyncio
 import time
 from dataclasses import dataclass
 
+from app import db as db_module
 from app.clients import get_http_client, get_slack_client, llm_client
 from app.config import FINNHUB_QUOTE_URL, TAVILY_SEARCH_URL, log, settings
 
@@ -77,13 +78,19 @@ async def _slack_call() -> None:
     await get_slack_client().auth_test()
 
 
+async def _db_call() -> None:
+    async with db_module.get_pool().acquire() as conn:
+        await conn.fetchval("SELECT 1")
+
+
 async def check_all() -> list[PingResult]:
-    """並行探測四家。永遠回傳長度 4 的 list（順序固定）。"""
-    return list(
-        await asyncio.gather(
-            _timed("OpenAI", _openai_call()),
-            _timed("Finnhub", _finnhub_call()),
-            _timed("Tavily", _tavily_call()),
-            _timed("Slack", _slack_call()),
-        )
-    )
+    """並行探測所有依賴。DB 模式時多一條 PostgreSQL。"""
+    coros = [
+        _timed("OpenAI", _openai_call()),
+        _timed("Finnhub", _finnhub_call()),
+        _timed("Tavily", _tavily_call()),
+        _timed("Slack", _slack_call()),
+    ]
+    if db_module.is_db_enabled():
+        coros.append(_timed("PostgreSQL", _db_call()))
+    return list(await asyncio.gather(*coros))

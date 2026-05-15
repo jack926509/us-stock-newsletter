@@ -246,32 +246,39 @@ def test_resume_calls_resume(monkeypatch):
 # ─── watchlist sub-commands ────────────────────────────
 
 
+def _async_returning(value):
+    """產生會回 `value` 的 async 函式（用於 monkeypatch async 依賴）。"""
+    async def _fn(*args, **kwargs):
+        return value
+    return _fn
+
+
 def test_watchlist_list(monkeypatch):
-    monkeypatch.setattr(sc, "read_raw_watchlist", lambda: ["AAPL", "NVDA"])
-    r = cmd_watchlist([])
+    monkeypatch.setattr(sc, "read_raw_watchlist", _async_returning(["AAPL", "NVDA"]))
+    r = asyncio.run(cmd_watchlist([]))
     assert "AAPL" in r["text"]
     assert "2 檔" in r["text"]
 
 
 def test_watchlist_list_empty(monkeypatch):
-    monkeypatch.setattr(sc, "read_raw_watchlist", lambda: [])
-    r = cmd_watchlist([])
+    monkeypatch.setattr(sc, "read_raw_watchlist", _async_returning([]))
+    r = asyncio.run(cmd_watchlist([]))
     assert "空的" in r["text"]
 
 
 def test_watchlist_add_no_args():
-    r = cmd_watchlist(["add"])
+    r = asyncio.run(cmd_watchlist(["add"]))
     assert "用法" in r["text"]
 
 
 def test_watchlist_add_dispatches(monkeypatch):
     from app.data.watchlist import MutationResult
 
-    def fake_add(raw):
+    async def fake_add(raw):
         return MutationResult(added=["AAPL"], invalid=["bad!"], final_count=1)
 
     monkeypatch.setattr(sc, "add_tickers", fake_add)
-    r = cmd_watchlist(["add", "aapl", "bad!"])
+    r = asyncio.run(cmd_watchlist(["add", "aapl", "bad!"]))
     assert "AAPL" in r["text"]
     assert "bad!" in r["text"]
     assert "1 檔" in r["text"]
@@ -280,18 +287,18 @@ def test_watchlist_add_dispatches(monkeypatch):
 def test_watchlist_remove_dispatches(monkeypatch):
     from app.data.watchlist import MutationResult
 
-    def fake_remove(raw):
+    async def fake_remove(raw):
         return MutationResult(removed=["TSLA"], skipped_missing=["XYZ"], final_count=2)
 
     monkeypatch.setattr(sc, "remove_tickers", fake_remove)
-    r = cmd_watchlist(["remove", "TSLA", "XYZ"])
+    r = asyncio.run(cmd_watchlist(["remove", "TSLA", "XYZ"]))
     assert "已移除" in r["text"]
     assert "不在清單" in r["text"]
 
 
 def test_watchlist_clear_returns_confirm_blocks(monkeypatch):
-    monkeypatch.setattr(sc, "read_raw_watchlist", lambda: ["AAPL", "NVDA"])
-    r = cmd_watchlist(["clear"])
+    monkeypatch.setattr(sc, "read_raw_watchlist", _async_returning(["AAPL", "NVDA"]))
+    r = asyncio.run(cmd_watchlist(["clear"]))
     assert "blocks" in r
     # 必有兩個按鈕
     actions_block = next(b for b in r["blocks"] if b["type"] == "actions")
@@ -299,8 +306,8 @@ def test_watchlist_clear_returns_confirm_blocks(monkeypatch):
 
 
 def test_watchlist_clear_when_empty_skips_confirm(monkeypatch):
-    monkeypatch.setattr(sc, "read_raw_watchlist", lambda: [])
-    r = cmd_watchlist(["clear"])
+    monkeypatch.setattr(sc, "read_raw_watchlist", _async_returning([]))
+    r = asyncio.run(cmd_watchlist(["clear"]))
     assert "已經是空的" in r["text"]
     assert "blocks" not in r
 

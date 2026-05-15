@@ -87,7 +87,13 @@ class Settings(BaseSettings):
     )
     watchlist_path: str = Field(
         default="watchlist.json",
-        description="自選股清單檔案路徑（相對於 repo 根目錄）",
+        description="自選股清單檔案路徑（DATABASE_URL 未設時使用；DB 模式下只當 seed 來源）",
+    )
+
+    # ─── PostgreSQL（選填；設定後 watchlist 改存 DB） ─────────
+    database_url: str = Field(
+        default="",
+        description="PostgreSQL DSN（postgresql://user:pass@host:port/db）；設定後 watchlist 改存 DB，未設則維持檔案模式",
     )
 
     @field_validator("hedge_fund_analysts", mode="before")

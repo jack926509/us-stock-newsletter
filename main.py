@@ -25,6 +25,8 @@ from app.clients import (
     init_http_client,
     init_slack_client,
 )
+from app.db import close_pool as close_db_pool, init_pool as init_db_pool
+from app.data.watchlist import seed_from_file_if_empty
 from app.pipeline import run_newsletter_pipeline
 from app.slack_commands import (
     channel_allowed,
@@ -70,9 +72,11 @@ def _next_scheduled_run() -> str | None:
 
 @asynccontextmanager
 async def lifespan(fast_app: FastAPI):
-    """應用程式生命週期：啟動 HTTP client / Slack client，啟動排程，停止時銷毀。"""
+    """應用程式生命週期：啟動 HTTP / Slack / DB pool，啟動排程，停止時銷毀。"""
     await init_http_client()
     await init_slack_client()
+    await init_db_pool()
+    await seed_from_file_if_empty()
 
     scheduler.add_job(
         run_newsletter_pipeline,
@@ -97,6 +101,7 @@ async def lifespan(fast_app: FastAPI):
     log.info("🛑 關閉服務中...")
     scheduler_handle.scheduler = None
     scheduler.shutdown()
+    await close_db_pool()
     await close_slack_client()
     await close_http_client()
 
@@ -208,7 +213,7 @@ async def slack_interactivity_endpoint(request: Request):
     if channel_id and not channel_allowed(channel_id, channel_name):
         return cmd_denied_channel()
 
-    return dispatch_interactivity(payload)
+    return await dispatch_interactivity(payload)
 
 
 if __name__ == "__main__":
