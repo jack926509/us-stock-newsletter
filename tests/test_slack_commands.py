@@ -17,7 +17,6 @@ os.environ.setdefault("SLACK_CHANNEL", "C012DAILY")
 from app import slack_commands as sc  # noqa: E402
 from app.slack_commands import (  # noqa: E402
     channel_allowed,
-    cmd_help,
     cmd_pause,
     cmd_resume,
     cmd_run,
@@ -110,27 +109,6 @@ def test_channel_allowed_by_name(monkeypatch):
 def test_channel_allowed_empty(monkeypatch):
     monkeypatch.setattr(sc.settings, "slack_channel", "")
     assert channel_allowed("C001X", "anything") is False
-
-
-# ─── help ───────────────────────────────────────────────
-
-
-def test_help_overview_lists_all_commands():
-    r = cmd_help([])
-    text = r["text"]
-    for cmd in ("status", "ping", "run", "pause", "resume", "watchlist"):
-        assert cmd in text
-
-
-def test_help_for_known_command():
-    r = cmd_help(["watchlist"])
-    assert "watchlist add" in r["text"]
-    assert "watchlist remove" in r["text"]
-
-
-def test_help_for_unknown_command():
-    r = cmd_help(["nonexistent"])
-    assert "nonexistent" in r["text"]
 
 
 # ─── status ─────────────────────────────────────────────
@@ -315,16 +293,71 @@ def test_watchlist_clear_when_empty_skips_confirm(monkeypatch):
 # ─── dispatch ───────────────────────────────────────────
 
 
-def test_dispatch_empty_returns_help():
-    r = asyncio.run(dispatch("", trigger=lambda: (True, "ok", 0)))
-    assert "指令總覽" in r["text"]
-
-
-def test_dispatch_unknown():
-    r = asyncio.run(dispatch("foo bar", trigger=lambda: (True, "ok", 0)))
-    assert "foo" in r["text"]
+def _trig_ok():
+    return True, "ok", 0
 
 
 def test_dispatch_routes_to_status():
-    r = asyncio.run(dispatch("status", trigger=lambda: (True, "ok", 0)))
+    r = asyncio.run(dispatch("/status", "", trigger=_trig_ok))
     assert "美股日報狀態" in r["text"]
+
+
+def test_dispatch_strips_leading_slash():
+    """Slack 帶 / 的 command 與不帶 / 應該都接受。"""
+    r1 = asyncio.run(dispatch("/status", "", trigger=_trig_ok))
+    r2 = asyncio.run(dispatch("status", "", trigger=_trig_ok))
+    assert "美股日報狀態" in r1["text"]
+    assert "美股日報狀態" in r2["text"]
+
+
+def test_dispatch_unknown_command_lists_registered():
+    r = asyncio.run(dispatch("/foo", "", trigger=_trig_ok))
+    assert "未知指令" in r["text"]
+    for name in ("status", "ping", "run", "pause", "resume", "watchlist"):
+        assert name in r["text"]
+
+
+def test_dispatch_routes_to_run(monkeypatch):
+    calls = []
+
+    def trig():
+        calls.append(1)
+        return True, "排入背景。", 0
+
+    r = asyncio.run(dispatch("/run", "", trigger=trig))
+    assert calls == [1]
+    assert "✅" in r["text"]
+
+
+def test_dispatch_routes_to_watchlist_list(monkeypatch):
+    async def fake_read():
+        return ["AAPL"]
+    monkeypatch.setattr(sc, "read_raw_watchlist", fake_read)
+    r = asyncio.run(dispatch("/watchlist", "", trigger=_trig_ok))
+    assert "AAPL" in r["text"]
+
+
+def test_dispatch_routes_to_watchlist_add(monkeypatch):
+    from app.data.watchlist import MutationResult
+
+    async def fake_add(raw):
+        return MutationResult(added=["AAPL"], final_count=1)
+
+    monkeypatch.setattr(sc, "add_tickers", fake_add)
+    r = asyncio.run(dispatch("/watchlist", "add aapl", trigger=_trig_ok))
+    assert "AAPL" in r["text"]
+    assert "已加入" in r["text"]
+
+
+def test_dispatch_pause_with_duration(monkeypatch):
+    from datetime import datetime
+    captured = {}
+
+    def fake_pause_for(seconds):
+        captured["seconds"] = seconds
+        return datetime(2026, 5, 16, 10, 0, 0)
+
+    monkeypatch.setattr(sc, "pause_for", fake_pause_for)
+    r = asyncio.run(dispatch("/pause", "30m", trigger=_trig_ok))
+    assert captured["seconds"] == 1800
+    assert "30 分鐘" in r["text"]

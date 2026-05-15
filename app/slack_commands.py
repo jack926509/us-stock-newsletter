@@ -1,17 +1,19 @@
 """
-Slack Slash Command 處理（`/newsletter`）
+Slack Slash Command 處理（6 個 top-level 指令）
 
 支援的指令：
-    help [<command>]               — 列總覽 / 看單一指令詳細
-    status                         — 排程、今日進度、上次結果、暫停狀態
-    ping                           — 並行探測 OpenAI / Finnhub / Tavily / Slack
-    run                            — 觸發日報（共用 300s cooldown）
-    pause [<duration>]             — 暫停排程；duration 例 30m / 2h / 1d
-    resume                         — 恢復排程
-    watchlist                      — 列出
-    watchlist add <T...>           — 加（多檔以空格分隔，自動 uppercase / dedupe）
-    watchlist remove <T...>        — 移除
-    watchlist clear                — 互動式按鈕二次確認後清空
+    /status                         — 排程、今日進度、上次結果、暫停狀態
+    /ping                           — 並行探測 OpenAI / Finnhub / Tavily / Slack（+ DB）
+    /run                            — 觸發日報（共用 300s cooldown）
+    /pause [<duration>]             — 暫停排程；duration 例 30m / 2h / 1d
+    /resume                         — 恢復排程
+    /watchlist                      — 列出自選股
+    /watchlist add <T...>           — 加（多檔以空格分隔，自動 uppercase / dedupe）
+    /watchlist remove <T...>        — 移除
+    /watchlist clear                — 互動按鈕二次確認後清空
+
+所有指令共用同一個 Request URL `/slack/command`，後端用 payload 的 `command`
+欄位分派。Slack App 要為每個 top-level 指令各別註冊一條 slash command。
 
 安全性：
 - HMAC-SHA256 驗證 X-Slack-Signature + 5 分鐘 timestamp 防 replay
@@ -23,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from app.config import TRIGGER_COOLDOWN_SECONDS, log, settings
 from app.data.watchlist import (
@@ -45,6 +47,17 @@ from app.slack_blocks import confirm_clear_watchlist
 from app.state import cooldown_state, pipeline_state, scheduler_handle
 
 _MAX_TIMESTAMP_SKEW_SECONDS = 60 * 5
+
+
+WATCHLIST_USAGE = (
+    "*watchlist 用法*\n"
+    "• `/watchlist` — 列出全部\n"
+    "• `/watchlist add <TICKER...>` — 加（多檔以空格分隔）\n"
+    "• `/watchlist remove <TICKER...>` — 移除\n"
+    "• `/watchlist clear` — 互動按鈕二次確認後清空\n"
+    "\n格式規則：1-10 字元，限 A-Z 與 `.` `-`；自動 uppercase / dedupe。"
+)
+
 
 # ─── 訊息工具 ───────────────────────────────────────────────
 
@@ -107,100 +120,12 @@ def channel_allowed(channel_id: str, channel_name: str) -> bool:
     return channel_name == allowed.lstrip("#")
 
 
-# ─── 指令說明（用於 help / help <sub>）────────────────────
-
-
-COMMAND_HELP: dict[str, dict[str, str]] = {
-    "help": {
-        "usage": "/newsletter help [<command>]",
-        "summary": "顯示指令說明",
-        "detail": "不帶參數 = 全部指令總覽；帶參數 = 該指令的詳細用法。",
-    },
-    "status": {
-        "usage": "/newsletter status",
-        "summary": "排程、今日進度、上次結果、暫停狀態",
-        "detail": (
-            "顯示：\n"
-            "• 下次排程時刻\n"
-            "• 今日 pipeline 是否已跑、成功/失敗、耗時\n"
-            "• 排程暫停狀態（含 auto-resume 時刻）\n"
-            "• 手動觸發冷卻剩餘秒數\n"
-            "• 背景任務數"
-        ),
-    },
-    "ping": {
-        "usage": "/newsletter ping",
-        "summary": "探測 OpenAI / Finnhub / Tavily / Slack 連線",
-        "detail": "並行對四家發輕量請求，5 秒超時，回各自 latency 與錯誤訊息。",
-    },
-    "run": {
-        "usage": "/newsletter run",
-        "summary": "立即觸發日報（受 300 秒 cooldown 保護）",
-        "detail": (
-            "把 pipeline 排入背景並立即回 ack。日報結果會推到 SLACK_CHANNEL。\n"
-            "兩次觸發間至少 300 秒，過早觸發會回剩餘冷卻時間。"
-        ),
-    },
-    "pause": {
-        "usage": "/newsletter pause [<duration>]",
-        "summary": "暫停排程；可選帶時長",
-        "detail": (
-            "不帶參數 = 暫停到手動 `/newsletter resume`。\n"
-            "帶 duration（如 `30m` / `2h` / `1d`）= 暫停指定時間後自動恢復。\n"
-            "暫停期間 `/newsletter run` 仍可手動觸發。"
-        ),
-    },
-    "resume": {
-        "usage": "/newsletter resume",
-        "summary": "恢復排程",
-        "detail": "立即恢復排程，並取消任何 pending 的 auto-resume 任務。",
-    },
-    "watchlist": {
-        "usage": "/newsletter watchlist [add|remove|clear] [<TICKER...>]",
-        "summary": "自選股管理",
-        "detail": (
-            "• `/newsletter watchlist` — 列出全部\n"
-            "• `/newsletter watchlist add AAPL NVDA` — 加（多檔以空格分隔）\n"
-            "• `/newsletter watchlist remove TSLA` — 移除\n"
-            "• `/newsletter watchlist clear` — 互動按鈕二次確認後清空\n"
-            "\n"
-            "格式規則：1-10 字元，限 A-Z 與 `.` `-`；自動 uppercase / dedupe。"
-        ),
-    },
-}
-
-
-def _help_overview() -> dict[str, Any]:
-    lines = ["*美股日報指令總覽*"]
-    for name, meta in COMMAND_HELP.items():
-        lines.append(f"• `{meta['usage']}` — {meta['summary']}")
-    lines.append("\n輸入 `/newsletter help <command>` 看單一指令詳細。")
-    return ephemeral("\n".join(lines))
-
-
-def _help_for(name: str) -> dict[str, Any]:
-    meta = COMMAND_HELP.get(name)
-    if not meta:
-        return ephemeral(f"沒有 `{name}` 這個指令。\n\n" + _help_overview()["text"])
-    return ephemeral(
-        f"*{name}* — {meta['summary']}\n\n"
-        f"用法：`{meta['usage']}`\n\n{meta['detail']}"
-    )
-
-
 # ─── 各 sub-command handler ────────────────────────────────
-
-
-def cmd_help(args: list[str]) -> dict[str, Any]:
-    if not args:
-        return _help_overview()
-    return _help_for(args[0].lower())
 
 
 def cmd_status(args: list[str]) -> dict[str, Any]:
     lines = ["*美股日報狀態*"]
 
-    # 下次排程
     sched = scheduler_handle.scheduler
     if sched is None:
         lines.append("• 下次排程：(scheduler 未初始化)")
@@ -209,17 +134,15 @@ def cmd_status(args: list[str]) -> dict[str, Any]:
         next_run = job.next_run_time if job else None
         lines.append(f"• 下次排程：`{next_run}`" if next_run else "• 下次排程：⏸️ 已暫停")
 
-    # 暫停狀態
     if is_paused():
         resume_at = pending_resume_at()
         if resume_at:
             lines.append(f"• 排程狀態：⏸️ 暫停中（`{resume_at}` 自動恢復）")
         else:
-            lines.append("• 排程狀態：⏸️ 暫停中（無自動恢復，需 `/newsletter resume`）")
+            lines.append("• 排程狀態：⏸️ 暫停中（無自動恢復，需 `/resume`）")
     else:
         lines.append("• 排程狀態：▶️ 運作中")
 
-    # 上次 pipeline 結果
     ps = pipeline_state
     if ps.is_running:
         lines.append(f"• 目前進度：🟡 pipeline 運行中（{int(time.time() - ps.started_at)} 秒）")
@@ -234,7 +157,6 @@ def cmd_status(args: list[str]) -> dict[str, Any]:
     else:
         lines.append("• 上次結果：（本次啟動後尚未跑過）")
 
-    # 手動觸發冷卻
     last_trig = cooldown_state.last_manual_trigger
     if last_trig > 0:
         elapsed = int(time.time() - last_trig)
@@ -247,7 +169,6 @@ def cmd_status(args: list[str]) -> dict[str, Any]:
     else:
         lines.append("• 手動觸發：未曾觸發")
 
-    # 背景任務
     n = len(cooldown_state.background_tasks)
     lines.append(f"• 背景任務：{'🟡' if n else '🟢'} {n} 個" if n else "• 背景任務：🟢 閒置")
 
@@ -278,7 +199,7 @@ def cmd_pause(args: list[str]) -> dict[str, Any]:
             pause_indefinite()
         except RuntimeError as e:
             return ephemeral(f"⚠️ {e}")
-        return ephemeral("⏸️ 排程已暫停（無限期）。`/newsletter resume` 可恢復。")
+        return ephemeral("⏸️ 排程已暫停（無限期）。`/resume` 可恢復。")
 
     seconds, label = parse_duration(args[0])
     if seconds is None:
@@ -312,11 +233,11 @@ async def cmd_watchlist(args: list[str]) -> dict[str, Any]:
         return await _watchlist_list()
     if sub == "add":
         if not rest:
-            return ephemeral("用法：`/newsletter watchlist add <TICKER...>`")
+            return ephemeral("用法：`/watchlist add <TICKER...>`")
         return await _watchlist_add(rest)
     if sub == "remove":
         if not rest:
-            return ephemeral("用法：`/newsletter watchlist remove <TICKER...>`")
+            return ephemeral("用法：`/watchlist remove <TICKER...>`")
         return await _watchlist_remove(rest)
     if sub == "clear":
         current = await read_raw_watchlist()
@@ -324,9 +245,7 @@ async def cmd_watchlist(args: list[str]) -> dict[str, Any]:
             return ephemeral("ℹ️ watchlist 已經是空的。")
         return confirm_clear_watchlist(len(current))
 
-    return ephemeral(
-        f"未知 watchlist sub-command `{sub}`。\n\n" + _help_for("watchlist")["text"]
-    )
+    return ephemeral(f"未知 watchlist sub-command `{sub}`。\n\n{WATCHLIST_USAGE}")
 
 
 async def _watchlist_list() -> dict[str, Any]:
@@ -378,23 +297,23 @@ def cmd_denied_channel() -> dict[str, Any]:
 # ─── Dispatcher ────────────────────────────────────────────
 
 
+# 已註冊的 top-level command 集合（不含前置 /）
+_KNOWN_COMMANDS = {"status", "ping", "run", "pause", "resume", "watchlist"}
+
+
 async def dispatch(
+    command: str,
     text: str,
     *,
     trigger: Callable[[], tuple[bool, str, int]],
 ) -> dict[str, Any]:
-    """把使用者輸入的 text 解析成 sub-command 並呼叫對應 handler。
+    """依 Slack payload 的 `command`（如 `/status`）與 `text` 分派到對應 handler。
 
     `trigger` 是注入的觸發回呼（避免 commands ↔ main 循環 import）。
     """
-    parts = (text or "").strip().split()
-    if not parts:
-        return cmd_help([])
+    name = (command or "").lstrip("/").lower()
+    args = (text or "").strip().split()
 
-    name, args = parts[0].lower(), parts[1:]
-
-    if name == "help":
-        return cmd_help(args)
     if name == "status":
         return cmd_status(args)
     if name == "ping":
@@ -408,4 +327,7 @@ async def dispatch(
     if name == "watchlist":
         return await cmd_watchlist(args)
 
-    return ephemeral(f"未知指令 `{name}`。\n\n" + _help_overview()["text"])
+    log.warning("Slack 收到未註冊指令 /%s", name)
+    return ephemeral(
+        f"未知指令 `/{name}`。已註冊：{', '.join(f'`/{c}`' for c in sorted(_KNOWN_COMMANDS))}"
+    )

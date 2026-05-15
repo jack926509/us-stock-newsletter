@@ -170,7 +170,11 @@ def _verify_or_403(body: bytes, headers) -> None:
 
 @app.post("/slack/command")
 async def slack_command_endpoint(request: Request):
-    """Slack Slash Command 入口 `/newsletter <sub-command>`。"""
+    """Slack Slash Command 共用入口；依 payload `command` 欄位分派到 cmd_*。
+
+    Slack App 需為 /status /ping /run /pause /resume /watchlist 各別註冊一條
+    slash command，全部都把 Request URL 指到這個端點。
+    """
     body = await request.body()
     _verify_or_403(body, request.headers)
 
@@ -178,17 +182,18 @@ async def slack_command_endpoint(request: Request):
     channel_id = form.get("channel_id", "")
     channel_name = form.get("channel_name", "")
     user_id = form.get("user_id", "")
+    command = form.get("command", "")
     text = (form.get("text", "") or "").strip()
 
     if not channel_allowed(channel_id, channel_name):
         log.info(
-            "Slack 指令被拒（非允許頻道）: user=%s channel=%s/#%s",
-            user_id, channel_id, channel_name,
+            "Slack 指令被拒（非允許頻道）: user=%s channel=%s/#%s cmd=%s",
+            user_id, channel_id, channel_name, command,
         )
         return cmd_denied_channel()
 
-    log.info("Slack 指令: user=%s text=%r", user_id, text)
-    return await dispatch_slash(text, trigger=_trigger_pipeline)
+    log.info("Slack 指令: user=%s cmd=%s text=%r", user_id, command, text)
+    return await dispatch_slash(command, text, trigger=_trigger_pipeline)
 
 
 @app.post("/slack/interactivity")
