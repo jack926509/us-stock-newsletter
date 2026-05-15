@@ -185,9 +185,9 @@ us-stock-newsletter/
 #### 方式一：Slack（即時，需 Volume 持久化）
 
 ```
-/newsletter watchlist add AAPL NVDA
-/newsletter watchlist remove TSLA
-/newsletter watchlist clear     # 互動按鈕二次確認
+/watchlist add AAPL NVDA
+/watchlist remove TSLA
+/watchlist clear     # 互動按鈕二次確認
 ```
 
 **前提**：要設好 `WATCHLIST_PATH=/data/watchlist.json` 並掛 Zeabur Volume，否則改動會在重新部署時被 git repo 覆蓋。設定方式見下方。
@@ -196,7 +196,7 @@ us-stock-newsletter/
 
 1. 於 GitHub 網頁直接打開 `watchlist.json` → 點鉛筆圖示編輯 → commit 到 `main`
 2. Zeabur 會自動偵測 push 並重新部署
-3. 下一次排程（或手動 `/newsletter run`）就會以新清單跑 AI 多分析師
+3. 下一次排程（或手動 `/run`）就會以新清單跑 AI 多分析師
 
 > 推薦工作流：用 Slack 試水溫，覺得某檔值得長期觀察就 commit 進 repo。
 
@@ -235,7 +235,7 @@ watchlist 持久化採 PostgreSQL 雙模式：
 
 #### 排查
 
-- 用 `/newsletter ping` 看 PostgreSQL latency；連不上會列出錯誤訊息
+- 用 `/ping` 看 PostgreSQL latency；連不上會列出錯誤訊息
 - 表結構：`watchlist(ticker TEXT PRIMARY KEY, added_at TIMESTAMPTZ DEFAULT NOW())`，可用 `psql` 直接查 `SELECT * FROM watchlist ORDER BY added_at;`
 
 ---
@@ -351,26 +351,29 @@ curl -X POST https://your-service.zeabur.app/run
 
 > 觸發後立即回傳，日報流程在背景非同步執行。每次觸發間隔至少 **300 秒**，過於頻繁回傳 HTTP 429。
 
-### `POST /slack/command` — Slack Slash Command 入口
+### `POST /slack/command` — Slack Slash Command 共用入口
+
+6 個 top-level slash command（無前綴）全部都把 Request URL 指到這一個端點，後端依 payload 的 `command` 欄位分派：
 
 ```
-/newsletter help [<command>]              # 總覽，或單一指令詳細說明
-/newsletter status                        # 下次排程 / 上次結果 / 暫停狀態 / cooldown
-/newsletter ping                          # 並行健檢 OpenAI / Finnhub / Tavily / Slack
-/newsletter run                           # 觸發日報（共用 300s cooldown）
+/status                          # 下次排程 / 上次結果 / 暫停狀態 / cooldown
+/ping                            # 並行健檢 OpenAI / Finnhub / Tavily / Slack（+ PostgreSQL）
+/run                             # 觸發日報（共用 300s cooldown）
 
-/newsletter pause                         # 暫停排程（無限期）
-/newsletter pause 30m                     # 暫停 30 分鐘後自動恢復
-/newsletter pause 2h                      # 暫停 2 小時
-/newsletter resume                        # 立即恢復
+/pause                           # 暫停排程（無限期）
+/pause 30m                       # 暫停 30 分鐘後自動恢復
+/pause 2h                        # 暫停 2 小時
+/resume                          # 立即恢復
 
-/newsletter watchlist                     # 列出自選股
-/newsletter watchlist add AAPL NVDA       # 加（多檔以空格分隔）
-/newsletter watchlist remove TSLA         # 移除
-/newsletter watchlist clear               # 互動按鈕二次確認後清空
+/watchlist                       # 列出自選股
+/watchlist add AAPL NVDA         # 加（多檔以空格分隔）
+/watchlist remove TSLA           # 移除
+/watchlist clear                 # 互動按鈕二次確認後清空
 ```
 
 所有回應都是 **ephemeral**（只有發起人看到）；`run` 的結果一樣推到 `SLACK_CHANNEL`。
+
+> ⚠️ 因為命名不帶前綴，請確認 workspace 沒有其他 app 已經占用了同名 slash command（例如 GitHub / Datadog / PagerDuty）。若有衝突 Slack 會擋下後者註冊。
 
 **安全層**（必須全部過才會被處理）：
 1. `X-Slack-Signature` HMAC-SHA256 驗證
@@ -380,22 +383,32 @@ curl -X POST https://your-service.zeabur.app/run
 
 ### `POST /slack/interactivity` — Slack 互動元件入口
 
-處理 `watchlist clear` 的確認按鈕。同樣套用上面的 4 層安全驗證。
+處理 `/watchlist clear` 的確認按鈕。同樣套用上面的 4 層安全驗證。
 
 ### Slack App 設定步驟
 
 1. https://api.slack.com/apps → 你的 App
-2. **Slash Commands** → **Create New Command**
-   - Command: `/newsletter`
-   - Request URL: `https://your-service.zeabur.app/slack/command`
-   - Short Description: `美股日報控制台`
-   - Usage Hint: `help | status | ping | run | pause | resume | watchlist`
-   - **Save**
-3. **Interactivity & Shortcuts** → 開啟 **Interactivity** 開關
-   - Request URL: `https://your-service.zeabur.app/slack/interactivity`
+2. **Slash Commands** — 為下列 6 條各自 **Create New Command**，Request URL 全部填一樣：
+
+   | Command | Short Description | Usage Hint |
+   |---|---|---|
+   | `/status` | 美股日報排程狀態 | _(留空)_ |
+   | `/ping` | 美股日報連線健檢 | _(留空)_ |
+   | `/run` | 立即觸發美股日報 | _(留空)_ |
+   | `/pause` | 暫停美股日報排程 | `[30m \| 2h \| 1d]` |
+   | `/resume` | 恢復美股日報排程 | _(留空)_ |
+   | `/watchlist` | 美股日報自選股管理 | `[add \| remove \| clear] [TICKER...]` |
+
+   - Request URL（每條都填）：`https://your-service.zeabur.app/slack/command`
+   - 全部完成後 **Save**
+
+3. **Interactivity & Shortcuts** → 開啟 **Interactivity**
+   - Request URL：`https://your-service.zeabur.app/slack/interactivity`
    - **Save Changes**
+
 4. **Basic Information** → **App Credentials** → 複製 **Signing Secret** → Zeabur Variables 設 `SLACK_SIGNING_SECRET`
-5. 若 OAuth scope 改動過要 **Install App** → **Reinstall to Workspace**
+
+5. **Install App** → **Reinstall to Workspace**（每次新增 slash command 都建議重裝一次，避免 workspace 端快取漏指令）
 
 ---
 
