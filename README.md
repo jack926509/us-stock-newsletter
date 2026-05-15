@@ -1,6 +1,6 @@
 # 美股新聞編輯室 🗞️
 
-全自動美股日報服務，**每週一至週五**早上 8:00（Asia/Taipei）定時透過 Telegram 推播。以多層 AI Agent 架構生成 Bloomberg/WSJ 風格的市場分析報告，部署於 Zeabur 雲端平台。
+全自動美股日報服務，**每週一至週五**早上 8:00（Asia/Taipei）定時透過 Slack 推播。以多層 AI Agent 架構生成 Bloomberg/WSJ 風格的市場分析報告，部署於 Zeabur 雲端平台。
 
 ---
 
@@ -15,7 +15,7 @@
 | 💰 **成本最佳化** | 規劃/撰寫用 `claude-haiku-4-6`，最終編輯升級 `claude-sonnet-4-6`，節省大量 API 費用 |
 | ⚡ **並行加速** | 市場報價、Tavily 搜尋、章節撰寫、個股分析全部 `asyncio.gather` 並行執行 |
 | 🔒 **防護機制** | Semaphore 控制並發上限、手動觸發冷卻 300 秒防刷 |
-| 📱 **精緻 Telegram UI** | 智能訊息合併、章節進度編號、個股共識卡片、Blockquote 層次、隱藏式免責聲明 |
+| 💬 **Slack Block Kit 版面** | 主貼文 + thread 細節，header/section/context 結構化呈現，章節進度編號、個股共識卡片、來源連結 |
 
 ---
 
@@ -42,7 +42,7 @@
    │
    ├─ Step 5 ──▶ claude-sonnet-4-6 Editor → 整合 + Pydantic 結構化輸出
    │
-   └─ Step 6 ──▶ Telegram 格式化 → 智能合併 → 推播
+   └─ Step 6 ──▶ Slack Block Kit 格式化 → 主貼文 + thread 推播
 ```
 
 ```mermaid
@@ -53,7 +53,7 @@ graph TD
     D[Tavily Search ×N<br/>深度新聞搜尋 並行] --> E
     E[claude-haiku-4-5 Writer ×N<br/>章節草稿 並行+Semaphore] --> F
     F[claude-sonnet-4-6 Editor<br/>Pydantic 結構化輸出] --> G
-    G[Telegram Bot<br/>智能合併 + 推播]
+    G[Slack Bot<br/>Block Kit + thread 推播]
 ```
 
 ---
@@ -72,11 +72,11 @@ us-stock-newsletter/
 │
 └── app/
     ├── config.py            # Pydantic Settings 環境變數驗證 + 全域常數
-    ├── clients.py           # Singleton 客戶端（OpenAI / Telegram / httpx）
+    ├── clients.py           # Singleton 客戶端（OpenAI / Slack / httpx）
     ├── models.py            # Pydantic 資料模型（Newsletter / Section / Source）
     ├── pipeline.py          # 核心流程協調器（6 步驟串接）
-    ├── formatter.py         # Telegram HTML 格式化工具
-    ├── sender.py            # Telegram 智能合併 + 安全推播
+    ├── formatter.py         # Slack Block Kit 格式化工具
+    ├── sender.py            # Slack chat.postMessage（主貼文 + thread）
     │
     ├── ai/
     │   ├── errors.py        # AIGenerationError 共用例外
@@ -151,18 +151,21 @@ us-stock-newsletter/
 
 透過 Anthropic **tool-use**（`input_schema` 來自 `NewsletterDraft.model_json_schema()`，verdicts 由 pipeline 注入避免 LLM 幻覺）直接拿到 schema-valid 的結構，最多重試 3 次（指數退避 3–15 秒）。`stop_reason == "max_tokens"` 時主動觸發 retry。
 
-### Step 6 — Telegram 推播（智能合併）
+### Step 6 — Slack 推播（Block Kit + thread）
 
-`sender.py` + `formatter.py` 組裝 HTML 訊息：
+`sender.py` + `formatter.py` 組裝 Slack Block Kit JSON：
 
-1. **`build_header()`** — 精簡單行標題 + 日期
-2. **`build_market_card()`** — 三大指數漲跌快照 + 市場短評
-3. **`build_section_block()`** × N — 帶進度編號 `[1/3]` 的章節 + 來源連結
-4. **`build_footer()`** — 投資啟示 + 隱藏式免責聲明（`<tg-spoiler>`）
+1. **`build_header_blocks()`** — header block 標題 + 日期 + 主旨
+2. **`build_market_blocks()`** — 三大指數漲跌快照（fields 雙欄）+ 市場短評
+3. **`build_section_blocks()` × N** — 各段以粗體小標 + 內文呈現（不分章節，串成一篇）+ 來源 context block 連結
+4. **`build_verdicts_blocks()`** — AI 多分析師個股共識卡片（可空）
+5. **`build_footer_blocks()`** — 投資啟示 + context 區免責聲明
 
-**智能合併**：`_merge_blocks()` 將相鄰區塊自動合併，6 個區塊壓縮至 2-3 則訊息，大幅減少通知數量。超過 4000 字元時在 `\n\n` 段落邊界安全切割。
+**主貼文 + thread 策略**：每天只有 1 則訊息出現在頻道（header + 大盤）。所有焦點段落串成「一整篇文章」放進 thread 的單一回覆裡（用 divider 視覺分段），個股共識與 footer 各自再一則 thread reply。頻道乾淨、細節完整。
 
-**錯誤告警**：任一步驟嚴重失敗，Pipeline 自動推播 HTML-escaped 錯誤訊息到 Telegram。
+**安全限制**：自動處理 section text 3000 字、單則訊息 50 blocks 上限；對 `429` rate limit 讀 `Retry-After` 退避，網路錯誤指數退避（最多 4 次）。
+
+**錯誤告警**：任一步驟嚴重失敗，Pipeline 自動把錯誤訊息以 Block Kit 推到同一個 Slack 頻道。
 
 ---
 
@@ -233,7 +236,7 @@ us-stock-newsletter/
      ```
    - 不需要 `Allow unrestricted branch pushes`，因為這個 routine 不寫回 repo。
 
-4. **驗證** — Routine 頁面有 *Run now* 按鈕；按一下確認能拿到 Telegram 推播。確認 OK 後排程才會生效。
+4. **驗證** — Routine 頁面有 *Run now* 按鈕；按一下確認能拿到 Slack 推播。確認 OK 後排程才會生效。
 
 ### 限制
 
@@ -256,8 +259,8 @@ us-stock-newsletter/
 | `ANTHROPIC_API_KEY` | ✅ | — | Anthropic API Key | [console.anthropic.com](https://console.anthropic.com) |
 | `FINNHUB_API_KEY` | ✅ | — | Finnhub API Key | [finnhub.io](https://finnhub.io) |
 | `TAVILY_API_KEY` | ✅ | — | Tavily API Key | [tavily.com](https://tavily.com) |
-| `TELEGRAM_TOKEN` | ✅ | — | Telegram Bot Token | `@BotFather` |
-| `TELEGRAM_CHAT_ID` | ✅ | — | 頻道/群組 ID | `@userinfobot` 或 `@getidsbot` |
+| `SLACK_BOT_TOKEN` | ✅ | — | Slack Bot Token（`xoxb-...`） | Slack App → OAuth & Permissions |
+| `SLACK_CHANNEL` | ✅ | — | 頻道 ID（建議）或 `#channel-name` | 頻道 → Get channel details → 底部 |
 | `CRON_HOUR` | | `8` | 排程觸發小時 | — |
 | `CRON_MINUTE` | | `0` | 排程觸發分鐘 | — |
 | `TIMEZONE` | | `Asia/Taipei` | 時區 | — |
@@ -340,7 +343,7 @@ uvicorn main:app --reload
 |------|------|
 | HTML 切割安全修復 | 遞迴式切割改為迭代式，消除 Stack Overflow 風險 |
 | OpenAI 並發保護 | 加入 `Semaphore(3)` 防止 Writer 並行觸發 429 |
-| 錯誤告警推播 | Pipeline 嚴重失敗時自動推播 Telegram 錯誤通知 |
+| 錯誤告警推播 | Pipeline 嚴重失敗時自動推播 Slack 錯誤通知 |
 
 ### v2 — Telegram UX 初版 + Bug 修復
 
@@ -394,7 +397,7 @@ uvicorn main:app --reload
 ### 功能擴充
 
 - [ ] **更多市場指數**：加入 VIX 恐慌指數、原油（WTI）、黃金、比特幣，豐富大盤快照
-- [ ] **多頻道支援**：允許設定多個 `TELEGRAM_CHAT_ID`，同時推播至多個群組或頻道
+- [ ] **多頻道支援**：允許設定多個 `SLACK_CHANNEL`，同時推播至多個 Slack 頻道
 - [ ] **歷史對比**：記錄每日大盤數據，快照中加入「前日對比 / 週漲跌」欄位
 - [ ] **市場情緒指數**：基於新聞語調與大盤走勢計算量化情緒分數（-5 到 +5），以圖示呈現
 

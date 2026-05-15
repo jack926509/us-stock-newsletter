@@ -1,13 +1,13 @@
 """
 單例客戶端初始化
 
-集中管理 httpx / OpenAI / Telegram 客戶端的生命週期。
-httpx.AsyncClient 與 telegram.Bot 都在 FastAPI lifespan 中初始化和關閉。
+集中管理 httpx / OpenAI / Slack 客戶端的生命週期。
+httpx.AsyncClient 與 Slack AsyncWebClient 都在 FastAPI lifespan 中初始化和關閉。
 """
 
 import httpx
-import telegram
 from openai import AsyncOpenAI
+from slack_sdk.web.async_client import AsyncWebClient
 
 from app.config import settings
 
@@ -18,9 +18,9 @@ llm_client = AsyncOpenAI(
     timeout=90.0,  # 涵蓋 Editor 最長呼叫時間
 )
 
-# httpx / telegram 需要在 async context 中初始化，由 lifespan 管理
+# httpx / slack 需要在 async context 中初始化，由 lifespan 管理
 http_client: httpx.AsyncClient | None = None
-telegram_bot: telegram.Bot | None = None
+slack_client: AsyncWebClient | None = None
 
 
 async def init_http_client() -> httpx.AsyncClient:
@@ -48,27 +48,24 @@ def get_http_client() -> httpx.AsyncClient:
     return http_client
 
 
-async def init_telegram_bot() -> telegram.Bot:
-    """初始化 Telegram Bot 並進入 async context（讓內部 httpx pool 啟動）。"""
-    global telegram_bot
-    bot = telegram.Bot(token=settings.telegram_token)
-    await bot.initialize()
-    telegram_bot = bot
-    return bot
+async def init_slack_client() -> AsyncWebClient:
+    """初始化 Slack AsyncWebClient，呼叫 auth.test 驗證 token 有效。"""
+    global slack_client
+    client = AsyncWebClient(token=settings.slack_bot_token, timeout=30)
+    # 啟動時驗證 token，失敗在這裡早炸，比運行時送訊失敗易診斷
+    await client.auth_test()
+    slack_client = client
+    return client
 
 
-async def close_telegram_bot() -> None:
-    """關閉 Telegram Bot（釋放 httpx pool）。"""
-    global telegram_bot
-    if telegram_bot is not None:
-        try:
-            await telegram_bot.shutdown()
-        finally:
-            telegram_bot = None
+async def close_slack_client() -> None:
+    """釋放 Slack client（slack_sdk 沒有顯式 close，這裡只清空 singleton）。"""
+    global slack_client
+    slack_client = None
 
 
-def get_telegram_bot() -> telegram.Bot:
-    """取得 Telegram Bot，尚未初始化則拋例外。"""
-    if telegram_bot is None:
-        raise RuntimeError("telegram bot 尚未初始化，請先呼叫 init_telegram_bot()")
-    return telegram_bot
+def get_slack_client() -> AsyncWebClient:
+    """取得 Slack client，尚未初始化則拋例外。"""
+    if slack_client is None:
+        raise RuntimeError("slack client 尚未初始化，請先呼叫 init_slack_client()")
+    return slack_client

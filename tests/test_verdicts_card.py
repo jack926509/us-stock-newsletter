@@ -1,19 +1,27 @@
-"""build_verdicts_card Telegram HTML 輸出測試"""
+"""build_verdicts_blocks Slack Block Kit 輸出測試"""
 
 import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 os.environ.setdefault("FINNHUB_API_KEY", "test")
 os.environ.setdefault("TAVILY_API_KEY", "test")
-os.environ.setdefault("TELEGRAM_TOKEN", "test")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test")
+os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-test")
+os.environ.setdefault("SLACK_CHANNEL", "C_TEST")
 
-from app.formatter import build_verdicts_card  # noqa: E402
+from app.formatter import build_verdicts_blocks  # noqa: E402
 from app.models import AnalystSignal, TickerVerdict  # noqa: E402
 
 
-def test_empty_returns_empty_string():
-    assert build_verdicts_card([]) == ""
+def _all_text(blocks):
+    out: list[str] = []
+    for b in blocks:
+        if "text" in b and isinstance(b["text"], dict):
+            out.append(b["text"].get("text", ""))
+    return "\n".join(out)
+
+
+def test_empty_returns_empty_list():
+    assert build_verdicts_blocks([]) == []
 
 
 def test_single_verdict_renders_core_fields():
@@ -39,18 +47,20 @@ def test_single_verdict_renders_core_fields():
             ],
         )
     ]
-    html = build_verdicts_card(verdicts)
-    assert "AI 分析師個股共識" in html
-    assert "<b>AAPL</b>" in html
-    assert "BUY" in html
-    assert "72%" in html
-    assert "護城河穩固" in html
-    # analyst display names
-    assert "Warren Buffett" in html
-    assert "技術面分析" in html
+    blocks = build_verdicts_blocks(verdicts)
+    text = _all_text(blocks)
+    # header block
+    assert blocks[0]["type"] == "header"
+    assert "AI 分析師個股共識" in blocks[0]["text"]["text"]
+    assert "*AAPL*" in text
+    assert "BUY" in text
+    assert "72%" in text
+    assert "護城河穩固" in text
+    assert "Warren Buffett" in text
+    assert "技術面分析" in text
 
 
-def test_html_escape_applied():
+def test_mrkdwn_escape_applied():
     verdicts = [
         TickerVerdict(
             ticker="T&T",
@@ -60,10 +70,10 @@ def test_html_escape_applied():
             signals=[],
         )
     ]
-    html = build_verdicts_card(verdicts)
-    assert "T&amp;T" in html
-    assert "<script>bad</script>" not in html
-    assert "&lt;script&gt;" in html
+    text = _all_text(build_verdicts_blocks(verdicts))
+    assert "T&amp;T" in text
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text
 
 
 def test_multiple_verdicts_all_rendered():
@@ -71,6 +81,6 @@ def test_multiple_verdicts_all_rendered():
         TickerVerdict(ticker=t, action="hold", confidence=0.5)
         for t in ["AAPL", "NVDA", "MSFT"]
     ]
-    html = build_verdicts_card(verdicts)
+    text = _all_text(build_verdicts_blocks(verdicts))
     for t in ["AAPL", "NVDA", "MSFT"]:
-        assert f"<b>{t}</b>" in html
+        assert f"*{t}*" in text
