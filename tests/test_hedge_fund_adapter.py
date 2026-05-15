@@ -6,8 +6,8 @@ import os
 os.environ.setdefault("OPENAI_API_KEY", "test")
 os.environ.setdefault("FINNHUB_API_KEY", "test")
 os.environ.setdefault("TAVILY_API_KEY", "test")
-os.environ.setdefault("TELEGRAM_TOKEN", "test")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test")
+os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-test")
+os.environ.setdefault("SLACK_CHANNEL", "C_TEST")
 
 from app.ai.hedge_fund import (  # noqa: E402
     _coerce_action,

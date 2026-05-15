@@ -8,8 +8,8 @@
 import asyncio
 
 from app.config import log, settings
-from app.clients import get_telegram_bot
-from app.formatter import escape_html
+from app.clients import get_slack_client
+from app.formatter import escape_mrkdwn
 from app.data.finnhub import get_market_data, get_finnhub_news
 from app.data.tavily import tavily_search
 from app.data.watchlist import load_watchlist
@@ -17,7 +17,7 @@ from app.ai.planner import plan_newsletter
 from app.ai.writer import write_section
 from app.ai.editor import edit_newsletter
 from app.ai.hedge_fund import run_hedge_fund_analysis
-from app.sender import send_newsletter_to_telegram
+from app.sender import send_newsletter_to_slack
 
 
 async def run_newsletter_pipeline() -> None:
@@ -79,7 +79,7 @@ async def run_newsletter_pipeline() -> None:
 
         # 4. 對每個有效主題撰寫分析章節 (設定並發限制避免 429 Error)
         log.info("Tavily 搜索完成，開始並行撰寫各主題分析章節...")
-        sem = asyncio.Semaphore(3)  # 最多同時發 3 個 Anthropic 請求
+        sem = asyncio.Semaphore(3)  # 最多同時發 3 個 OpenAI 請求
 
         async def _bounded_write(*args):
             async with sem:
@@ -100,19 +100,39 @@ async def run_newsletter_pipeline() -> None:
             plan.title, sections, market_data, verdicts=verdicts
         )
         
-        # 6. 透過 Telegram 推播
-        log.info("排版完成，開始推送 Telegram 頻道...")
-        await send_newsletter_to_telegram(newsletter, market_data)
+        # 6. 透過 Slack 推播
+        log.info("排版完成，開始推送 Slack 頻道...")
+        await send_newsletter_to_slack(newsletter, market_data)
         log.info("✅ 流程結束，美股日報發送成功")
-        
+
     except Exception as e:
         log.exception("❌ 美股日報生成流程發生未預期嚴重失敗: %s", e)
         try:
-            # 報錯推送到群組
-            await get_telegram_bot().send_message(
-                chat_id=settings.telegram_chat_id,
-                text=f"⚠️ <b>美股新聞編輯室發生異常</b>\n\n系統生成日報過程中遭遇失敗，請檢查 Zeabur Log。\n<code>{escape_html(str(e))}</code>",
-                parse_mode="HTML"
+            await get_slack_client().chat_postMessage(
+                channel=settings.slack_channel,
+                text="⚠️ 美股新聞編輯室發生異常",
+                blocks=[
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "⚠️ 美股新聞編輯室發生異常", "emoji": True},
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "系統生成日報過程中遭遇失敗，請檢查部署 Log。",
+                        },
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"```{escape_mrkdwn(str(e))[:2500]}```",
+                        },
+                    },
+                ],
+                unfurl_links=False,
+                unfurl_media=False,
             )
         except Exception as notify_e:
-            log.error("Telegram 錯誤通知發送失敗，無法推播告警: %s", notify_e)
+            log.error("Slack 錯誤通知發送失敗，無法推播告警: %s", notify_e)

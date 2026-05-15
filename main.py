@@ -20,9 +20,9 @@ import pytz
 from app.config import settings, log, TRIGGER_COOLDOWN_SECONDS
 from app.clients import (
     close_http_client,
-    close_telegram_bot,
+    close_slack_client,
     init_http_client,
-    init_telegram_bot,
+    init_slack_client,
 )
 from app.pipeline import run_newsletter_pipeline
 
@@ -40,9 +40,9 @@ _background_tasks: set = set()  # 防止背景 task 被 GC 回收
 
 @asynccontextmanager
 async def lifespan(fast_app: FastAPI):
-    """應用程式生命週期：啟動 HTTP client / Telegram bot，啟動排程，停止時銷毀。"""
+    """應用程式生命週期：啟動 HTTP client / Slack client，啟動排程，停止時銷毀。"""
     await init_http_client()
-    await init_telegram_bot()
+    await init_slack_client()
 
     # 加入每日任務（限定週一至週五）
     scheduler.add_job(
@@ -64,7 +64,7 @@ async def lifespan(fast_app: FastAPI):
     # 關閉服務
     log.info("🛑 關閉服務中...")
     scheduler.shutdown()
-    await close_telegram_bot()
+    await close_slack_client()
     await close_http_client()
 
 

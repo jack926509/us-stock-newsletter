@@ -9,8 +9,8 @@ import pytest
 os.environ.setdefault("OPENAI_API_KEY", "test")
 os.environ.setdefault("FINNHUB_API_KEY", "test")
 os.environ.setdefault("TAVILY_API_KEY", "test")
-os.environ.setdefault("TELEGRAM_TOKEN", "test")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test")
+os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-test")
+os.environ.setdefault("SLACK_CHANNEL", "C_TEST")
 
 from app.config import DEFAULT_WATCHLIST, settings  # noqa: E402
 from app.data.watchlist import load_watchlist  # noqa: E402

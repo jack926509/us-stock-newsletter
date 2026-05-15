@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(..., description="OpenAI API Key（統一 LLM 入口）")
     finnhub_api_key: str = Field(..., description="Finnhub API Key")
     tavily_api_key: str = Field(..., description="Tavily API Key")
-    telegram_token: str = Field(..., description="Telegram Bot Token")
-    telegram_chat_id: str = Field(..., description="Telegram Chat/Channel ID")
+    slack_bot_token: str = Field(..., description="Slack Bot Token (xoxb-...)")
+    slack_channel: str = Field(..., description="Slack 頻道 ID（C...）或 #channel-name")
 
     # ─── 各階段使用的模型（OpenAI 模型 ID） ────────────────────
     # 預設選用 gpt-4o-mini（便宜 + tool calling 穩定）；可由 env 覆寫
@@ -110,7 +110,12 @@ except Exception as e:
 FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
 FINNHUB_NEWS_URL = "https://finnhub.io/api/v1/news"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
-TELEGRAM_MAX_LEN = 4000
+
+# Slack Block Kit 限制
+# https://api.slack.com/reference/block-kit/blocks
+SLACK_SECTION_TEXT_MAX = 3000   # section.text.text 上限
+SLACK_HEADER_TEXT_MAX = 150     # header.text.text 上限
+SLACK_BLOCKS_PER_MSG_MAX = 50   # 單則訊息最多 50 個 block
 
 MARKET_SYMBOLS = {
     "SPY": "S&P 500",
