@@ -59,19 +59,23 @@ def test_build_header_blocks():
     assert "*今日重點新聞*" in text  # Slack bold
 
 
-def test_build_section_blocks_with_numbering_and_sources():
+def test_build_section_blocks_continuous_article_style():
+    """段落不再是 header block + chapter 編號，標題改成內文粗體小標。"""
     from types import SimpleNamespace
     sources = [
         SimpleNamespace(title="Bloomberg News", url="https://example.com/1"),
         SimpleNamespace(title="Reuters", url="https://example.com/2"),
     ]
     blocks = build_section_blocks(0, 3, "NVDA 財報分析", "【NVDA】大漲", sources)
-    # header + section + context
-    assert blocks[0]["type"] == "header"
-    assert "[1/3]" in blocks[0]["text"]["text"]
-    assert "NVDA 財報分析" in blocks[0]["text"]["text"]
 
+    # 不應再有 header block，也不該出現 [1/3] 之類章節編號
+    assert all(b["type"] != "header" for b in blocks)
     text = _all_text(blocks)
+    assert "[1/3]" not in text
+    assert "[1/" not in text
+
+    # 標題以粗體形式出現在第一個 section 內
+    assert "*NVDA 財報分析*" in text
     assert "*NVDA*" in text  # ticker 被轉粗體
     assert "<https://example.com/1|[1] Bloomberg News>" in text
     assert "<https://example.com/2|[2] Reuters>" in text

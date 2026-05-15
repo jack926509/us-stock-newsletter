@@ -157,11 +157,11 @@ us-stock-newsletter/
 
 1. **`build_header_blocks()`** — header block 標題 + 日期 + 主旨
 2. **`build_market_blocks()`** — 三大指數漲跌快照（fields 雙欄）+ 市場短評
-3. **`build_section_blocks()` × N** — 帶進度編號 `[1/3]` 的章節 + 來源 context block 連結
+3. **`build_section_blocks()` × N** — 各段以粗體小標 + 內文呈現（不分章節，串成一篇）+ 來源 context block 連結
 4. **`build_verdicts_blocks()`** — AI 多分析師個股共識卡片（可空）
 5. **`build_footer_blocks()`** — 投資啟示 + context 區免責聲明
 
-**主貼文 + thread 策略**：每天只有 1 則訊息出現在頻道（header + 大盤），所有焦點章節、個股共識、footer 都以 `thread_ts` 收進 thread。頻道乾淨、細節完整。
+**主貼文 + thread 策略**：每天只有 1 則訊息出現在頻道（header + 大盤）。所有焦點段落串成「一整篇文章」放進 thread 的單一回覆裡（用 divider 視覺分段），個股共識與 footer 各自再一則 thread reply。頻道乾淨、細節完整。
 
 **安全限制**：自動處理 section text 3000 字、單則訊息 50 blocks 上限；對 `429` rate limit 讀 `Retry-After` 退避，網路錯誤指數退避（最多 4 次）。
 

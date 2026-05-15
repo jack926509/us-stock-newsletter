@@ -124,18 +124,21 @@ def build_market_blocks(market: dict, summary: str) -> list[dict]:
 
 
 def build_section_blocks(idx: int, total: int, title: str, body: str, sources: list) -> list[dict]:
-    """單個焦點章節區塊。"""
-    icons = ["🎯", "🔥", "💡", "📌", "⚡"]
-    icon = icons[idx] if idx < len(icons) else "🔹"
+    """單個焦點段落（純文章感，不帶章節編號 / icon / header block）。
 
-    title_text = _truncate(f"{icon} [{idx + 1}/{total}] {title}", SLACK_HEADER_TEXT_MAX)
-    body_text = highlight_ticker(escape_mrkdwn(body))
-    body_text = _quote_lines(body_text)
+    `idx` / `total` 保留參數簽名相容性，目前不用。
+    """
+    del idx, total  # 維持介面但不再使用
 
-    blocks: list[dict] = [
-        {"type": "header", "text": {"type": "plain_text", "text": title_text, "emoji": True}},
-    ]
-    for chunk in _split_for_section(body_text):
+    title_safe = escape_mrkdwn(title)
+    body_safe = highlight_ticker(escape_mrkdwn(body))
+
+    # 標題用粗體小標，與正文同一個 section text，避免 Slack header block 帶來的章節感
+    blocks: list[dict] = []
+    head_chunk_text = f"*{title_safe}*\n\n{body_safe}"
+
+    chunks = _split_for_section(head_chunk_text)
+    for chunk in chunks:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
 
     if sources:
@@ -146,7 +149,6 @@ def build_section_blocks(idx: int, total: int, title: str, body: str, sources: l
                 label = label[:29] + "…"
             url = getattr(s, "url", "")
             if url:
-                # Slack link format: <url|label>，label 內的 |、>、< 要轉義
                 safe_label = escape_mrkdwn(label).replace("|", "｜")
                 link_parts.append(f"<{url}|[{i}] {safe_label}>")
         if link_parts:

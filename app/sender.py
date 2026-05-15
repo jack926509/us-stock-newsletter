@@ -124,15 +124,19 @@ async def send_newsletter_to_slack(newsletter: Newsletter, market_data: dict) ->
     if not thread_ts:
         raise RuntimeError("Slack 主訊息送出後沒有拿到 ts，無法繼續 thread。")
 
-    # Thread：每個焦點章節獨立一則
+    # Thread：所有焦點段落串成一篇，僅以 divider 分隔（不再每章一則訊息）
     total = len(newsletter.sections)
+    article_blocks: list[dict] = []
     for i, section in enumerate(newsletter.sections):
-        section_blocks = build_section_blocks(
-            i, total, section.title, section.body, section.sources
+        if i > 0:
+            article_blocks.append({"type": "divider"})
+        article_blocks.extend(
+            build_section_blocks(i, total, section.title, section.body, section.sources)
         )
+    if article_blocks:
         await _post_in_thread(
-            section_blocks,
-            fallback_text=f"[{i + 1}/{total}] {section.title}",
+            article_blocks,
+            fallback_text=newsletter.subject or "美股日報內文",
             thread_ts=thread_ts,
         )
 
